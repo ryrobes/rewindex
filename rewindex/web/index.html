@@ -1,0 +1,81 @@
+<!doctype html>
+<html>
+
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Rewindex</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+  <script>
+    // Monaco loader (CDN). If offline, UI falls back to <pre> rendering.
+    window.MonacoEnv = { baseUrl: 'https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min/' };
+  </script>
+  <script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min/vs/loader.min.js"></script>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://cdn.prod.website-files.com/5f68e0b145d3321768cb2669/63ff6ca31c661686006fcc50_favicon2.png"
+    rel="shortcut icon" type="image/x-icon" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link
+    href="https://fonts.googleapis.com/css2?family=Inconsolata:wght@200..900&family=Montserrat:ital,wght@0,100..900;1,100..900&family=Quicksand:wght@300..700&family=Smooch+Sans:wght@100..900&family=Zalando+Sans:ital,wght@0,200..900;1,200..900&display=swap"
+    rel="stylesheet">
+  <link
+    href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@300..700&family=Zalando+Sans:ital,wght@0,200..900;1,200..900&display=swap"
+    rel="stylesheet">
+
+</head>
+
+<body>
+
+  <div id="sidebar">
+
+    <div class="section search-section">
+      <input id="q" class="input search-input" type="text" placeholder="Search codebase…" />
+      <div class="toggle-row">
+        <button id="followCli" class="btn-toggle">Follow CLI</button>
+        <button id="followUpdates" class="btn-toggle">Follow Updates</button>
+      </div>
+    </div>
+    <div class="section results-section">
+      <h3>Results</h3>
+      <div id="results"></div>
+    </div>
+    <div class="section language-bar-section">
+      <h3>Languages</h3>
+      <div id="languageBar" class="language-bar"></div>
+      <div id="languageLegend" class="language-legend"></div>
+    </div>
+    <div class="section status-section">
+      <div class="status-header">
+        <h3>Status</h3>
+        <div class="watcher-controls">
+          <button id="startWatch" class="btn btn-watcher">Start Watcher</button>
+          <button id="stopWatch" class="btn btn-watcher">Stop Watcher</button>
+        </div>
+      </div>
+      <div id="status" class="status"></div>
+    </div>
+    <!-- <img src="/static/logo.png" alt="Rewindex Logo" id="logo" width="100px" /> -->
+  </div>
+  <div id="workspace">
+    <div id="canvas"></div>
+    <div id="timeline">
+      <div id="sparkline">
+        <div id="sparkTick" class="tick cur"></div>
+        <div id="sparkHover" class="tick hover" style="display:none;"></div>
+      </div>
+      <div id="scrubWrap" style="display:none">
+        <input id="scrubber" type="range" min="0" max="1000" value="1000" />
+      </div>
+    </div>
+    <div id="asofFloat">
+      <span class="icon cur"></span>
+      <span id="asofLabel"></span>
+      <button id="goLive" class="btn live" title="Go Live">Live</button>
+    </div>
+  </div>
+  <div id="toasts" class="toasts"></div>
+  <script src="/static/app.js"></script>
+</body>
+
+</html>

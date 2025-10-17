@@ -1,0 +1,11 @@
+{
+  "project": {
+    "id": "2593f654-2418-54f2-ba8c-5376d43c5c0b",
+    "name": "rewindex",
+    "root": "."
+  },
+  "elasticsearch": {
+    "host": "localhost:9200",
+    "index_prefix": "rewindex_${project.id}"
+  }
+}
