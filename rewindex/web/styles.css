@@ -19,6 +19,32 @@ body {
   font-family: 'Fira Code', Inter, system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Noto Sans, Helvetica Neue, Arial, sans-serif;
 }
 
+/* Dark scrollbar styling */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 5px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(92, 106, 114, 0.5);
+  border-radius: 5px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(92, 106, 114, 0.7);
+}
+
+/* Firefox scrollbar */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(92, 106, 114, 0.5) rgba(0, 0, 0, 0.2);
+}
+
 #sidebar {
   position: fixed;
   left: 0;
@@ -34,6 +60,7 @@ body {
   z-index: 100;
   display: flex;
   flex-direction: column;
+  box-sizing: border-box;
 }
 
 #workspace {
@@ -274,6 +301,7 @@ body {
 .results-section {
   flex: 1;
   overflow-y: auto;
+  overflow-x: hidden;
   min-height: 0;
   margin-bottom: 12px;
 }
@@ -314,12 +342,14 @@ body {
   gap: 8px;
   margin-top: 6px;
   font-size: 10px;
+  overflow: hidden;
 }
 
 .language-legend-item {
   display: flex;
   align-items: center;
   gap: 4px;
+  overflow: hidden;
 }
 
 .language-legend-dot {
@@ -331,10 +361,15 @@ body {
 
 .language-legend-label {
   color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .language-legend-count {
   color: var(--muted);
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .status-section {
@@ -381,11 +416,13 @@ body {
 .status {
   font-size: 10px;
   line-height: 1.4;
+  overflow: hidden;
 }
 
 .status .kv {
   display: inline-block;
   margin: 2px 6px 2px 0;
+  overflow: hidden;
 }
 
 .status .k {
@@ -397,10 +434,27 @@ body {
   color: var(--text);
   word-break: break-all;
   white-space: normal;
+  overflow-wrap: break-word;
+}
+
+.toggle-section {
+  margin-top: 0 !important;
+  margin-bottom: 12px;
 }
 
 .search-section {
   margin-top: 0 !important;
+  width: 285px;
+  border-radius: 4px;
+  transition: opacity 0.2s ease, max-height 0.2s ease;
+  overflow: hidden;
+}
+
+.search-section.hidden {
+  max-height: 0;
+  opacity: 0;
+  margin-top: 0 !important;
+  margin-bottom: 0 !important;
 }
 
 .input {
@@ -436,7 +490,7 @@ body {
 .toggle-row {
   display: flex;
   gap: 8px;
-  margin-top: 10px;
+  margin-top: 0;
 }
 
 .btn-toggle {
@@ -490,11 +544,13 @@ body {
   padding: 6px;
   border-bottom: 1px solid #2a2f3a;
   cursor: pointer;
+  overflow: hidden;
 }
 
 .result-group {
   border-bottom: 1px solid #2a2f3a;
   padding: 6px 0;
+  overflow: hidden;
 }
 
 .result-file {
@@ -502,10 +558,13 @@ body {
   font-size: 13px;
   cursor: pointer;
   padding: 4px 6px;
+  word-break: break-word;
+  overflow-wrap: break-word;
 }
 
 .result-matches {
   margin-left: 10px;
+  overflow: hidden;
 }
 
 .result-match {
@@ -513,6 +572,9 @@ body {
   font-size: 12px;
   color: var(--muted);
   cursor: pointer;
+  word-break: break-word;
+  overflow-wrap: break-word;
+  white-space: normal;
 }
 
 .result-match:hover {

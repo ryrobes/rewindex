@@ -29,19 +29,21 @@
 
   <div id="sidebar">
 
-    <div class="section search-section">
-      <input id="q" class="input search-input" type="text" placeholder="Search codebase…" />
+    <div class="section toggle-section">
       <div class="toggle-row">
         <button id="followCli" class="btn-toggle">Follow CLI</button>
         <button id="followUpdates" class="btn-toggle">Follow Updates</button>
       </div>
+    </div>
+    <div class="section search-section" id="searchSection">
+      <input id="q" class="input search-input" type="text" placeholder="Search codebase…" />
     </div>
     <div class="section results-section">
       <h3>Results</h3>
       <div id="results"></div>
     </div>
     <div class="section language-bar-section">
-      <h3>Languages</h3>
+
       <div id="languageBar" class="language-bar"></div>
       <div id="languageLegend" class="language-legend"></div>
     </div>

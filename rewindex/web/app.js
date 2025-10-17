@@ -10,6 +10,7 @@
   const stopWatch = document.getElementById('stopWatch');
   const languageBarEl = document.getElementById('languageBar');
   const languageLegendEl = document.getElementById('languageLegend');
+  const searchSectionEl = document.getElementById('searchSection');
   const timeline = document.getElementById('timeline');
   const spark = document.getElementById('sparkline');
   const scrubber = document.getElementById('scrubber');
@@ -66,6 +67,8 @@
     if(animHandle) cancelAnimationFrame(animHandle);
     // ignore drags on timeline and its children
     if(e.target.closest('#timeline') || e.target.closest('#asofFloat')) return;
+    // Don't drag when clicking buttons or other interactive elements
+    if(e.target.closest('button')) return;
     dragging = true;
     dragStart = [e.clientX - offsetX, e.clientY - offsetY];
     workspace.setPointerCapture(e.pointerId);
@@ -439,26 +442,83 @@
     if(!tile) return;
     const btn = tile.querySelector('.dlbtn');
     if(!btn) return;
+
+    // Show button only when viewing historical version
     btn.style.display = (currentAsOfMs != null) ? 'inline-block' : 'none';
+
+    // Remove any existing click handler to avoid duplicates
+    btn.onclick = null;
+
     btn.onclick = (ev)=>{
-      ev.preventDefault(); ev.stopPropagation();
+      ev.preventDefault();
+      ev.stopPropagation();
+
       let content = '';
+
+      // Try to get content from Monaco editor
       const ed = editors.get(path);
-      if(ed && ed.getModel){ const model = ed.getModel(); if(model) content = model.getValue(); }
+      if(ed && ed.getModel){
+        const model = ed.getModel();
+        if(model){
+          content = model.getValue();
+        }
+      }
+
+      // Fallback to pre tag if Monaco didn't work
       if(!content){
         const body = tile.querySelector('.body');
-        const pre = body && body.querySelector('pre');
-        if(pre) content = pre.textContent || '';
+        const pre = body && body.querySelector('pre.pre');
+        if(pre){
+          content = pre.textContent || '';
+        }
       }
-      const base = path.split('/').pop() || 'file.txt';
-      const tsLabel = currentAsOfMs ? new Date(currentAsOfMs).toISOString().replace(/[:.]/g,'-') : 'live';
-      const name = currentAsOfMs ? `${base}.${tsLabel}` : base;
+
+      // If still no content, show error
+      if(!content){
+        showToast('Error: Could not retrieve file content');
+        console.error('Download failed: no content found for', path);
+        return;
+      }
+
+      // Generate clean filename with timestamp
+      const filename = path.split('/').pop() || 'file.txt';
+      const baseWithoutExt = filename.lastIndexOf('.') > 0
+        ? filename.substring(0, filename.lastIndexOf('.'))
+        : filename;
+      const ext = filename.lastIndexOf('.') > 0
+        ? filename.substring(filename.lastIndexOf('.'))
+        : '';
+
+      let downloadName = filename;
+      if(currentAsOfMs){
+        // Format: filename_YYYYMMDD-HHMMSS.ext
+        const d = new Date(currentAsOfMs);
+        const timestamp = d.getFullYear() +
+          String(d.getMonth() + 1).padStart(2, '0') +
+          String(d.getDate()).padStart(2, '0') +
+          '-' +
+          String(d.getHours()).padStart(2, '0') +
+          String(d.getMinutes()).padStart(2, '0') +
+          String(d.getSeconds()).padStart(2, '0');
+        downloadName = `${baseWithoutExt}_${timestamp}${ext}`;
+      }
+
+      // Create and trigger download
+      const blob = new Blob([content], {type:'text/plain;charset=utf-8'});
+      const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
-      a.href = URL.createObjectURL(new Blob([content], {type:'text/plain;charset=utf-8'}));
-      a.download = name;
+      a.href = url;
+      a.download = downloadName;
       document.body.appendChild(a);
       a.click();
-      setTimeout(()=>{ URL.revokeObjectURL(a.href); a.remove(); }, 0);
+
+      // Cleanup
+      setTimeout(()=>{
+        URL.revokeObjectURL(url);
+        a.remove();
+      }, 100);
+
+      showToast(`Downloaded: ${downloadName}`);
     };
   }
 
@@ -612,6 +672,12 @@
   followCliBtn.onclick = ()=>{
     followCliMode = !followCliMode;
     followCliBtn.classList.toggle('active', followCliMode);
+
+    // Hide/show search section when Follow CLI is toggled
+    if(searchSectionEl){
+      searchSectionEl.classList.toggle('hidden', followCliMode);
+    }
+
     qEl.disabled = followCliMode;
     if(!followCliMode){
       resultsEl.innerHTML='';
@@ -929,7 +995,19 @@
     // Rebuild canvas & tiles for new file set
     // Remove existing tiles
     for(const [p, tile] of tiles){ tile.remove(); }
-    tiles.clear(); editors.clear(); filePos.clear(); fileFolder.clear();
+
+    // Properly dispose Monaco editors to prevent memory leaks
+    for(const [, editor] of editors){
+      if(editor && typeof editor.dispose === 'function'){
+        try{
+          editor.dispose();
+        }catch(e){
+          console.warn('Failed to dispose editor:', e);
+        }
+      }
+    }
+
+    tiles.clear(); editors.clear(); filePos.clear(); fileFolder.clear(); fileLanguages.clear();
     for(const [, el] of folders){ el.remove(); } folders.clear();
 
     const tree = buildTree(list);
