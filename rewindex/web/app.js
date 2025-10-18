@@ -31,6 +31,15 @@
   const overlayEditorContainer = document.getElementById('overlayEditorContainer');
   const saveOverlayBtn = document.getElementById('saveOverlay');
   const cancelOverlayBtn = document.getElementById('cancelOverlay');
+  const diffOverlayEl = document.getElementById('diffOverlay');
+  const diffFilePathEl = document.getElementById('diffFilePath');
+  const diffEditorContainer = document.getElementById('diffEditorContainer');
+  const restoreDiffBtn = document.getElementById('restoreDiff');
+  const closeDiffBtn = document.getElementById('closeDiff');
+  const confirmModalEl = document.getElementById('confirmModal');
+  const confirmRestoreBtn = document.getElementById('confirmRestore');
+  const cancelRestoreBtn = document.getElementById('cancelRestore');
+  const confirmMessageEl = document.getElementById('confirmMessage');
 
   let timelineMin = null, timelineMax = null;
   let currentAsOfMs = null;
@@ -51,6 +60,9 @@
   const MAX_RECENT_UPDATES = 20;
   let overlayEditor = null; // Monaco editor instance for overlay
   let overlayEditorPath = null; // Current file path being edited
+  let diffEditor = null; // Monaco diff editor instance
+  let diffEditorPath = null; // Current file path in diff mode
+  let diffHistoricalContent = null; // Historical content for restore
 
   let scale = 1.0;
   let offsetX = 40;
@@ -433,6 +445,137 @@
     }
   }
 
+  async function openDiffEditor(path){
+    diffEditorPath = path;
+    diffFilePathEl.textContent = path;
+
+    try{
+      // Fetch current (live) version
+      const liveData = await fetchJSON('/file?path=' + encodeURIComponent(path));
+      const liveContent = liveData.content || '';
+
+      // Get historical version from tile editor
+      let historicalContent = '';
+      const ed = editors.get(path);
+      if(ed && ed.getModel){
+        const model = ed.getModel();
+        if(model){
+          historicalContent = model.getValue();
+        }
+      } else {
+        // Fallback to pre tag if Monaco didn't work
+        const tile = tiles.get(path);
+        if(tile){
+          const body = tile.querySelector('.body');
+          const pre = body && body.querySelector('pre.pre');
+          if(pre){
+            historicalContent = pre.textContent || '';
+          }
+        }
+      }
+
+      // Store historical content for restore
+      diffHistoricalContent = historicalContent;
+
+      // Clear container
+      diffEditorContainer.innerHTML = '';
+
+      // Create Monaco diff editor
+      if(typeof require === 'undefined'){
+        showToast('Monaco editor not available');
+        return;
+      }
+
+      require.config({ paths: { 'vs': 'https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min/vs' } });
+      require(['vs/editor/editor.main'], function(){
+        if(diffEditor){
+          try{ diffEditor.dispose(); }catch(e){}
+        }
+
+        diffEditor = monaco.editor.createDiffEditor(diffEditorContainer, {
+          readOnly: true,
+          minimap: { enabled: true },
+          theme: 'ayu-dark',
+          fontSize: 12,
+          automaticLayout: true,
+          renderSideBySide: true,
+        });
+
+        // Set models: original (historical) vs modified (current/live)
+        const originalModel = monaco.editor.createModel(historicalContent, normalizeLanguageForMonaco(liveData.language));
+        const modifiedModel = monaco.editor.createModel(liveContent, normalizeLanguageForMonaco(liveData.language));
+
+        diffEditor.setModel({
+          original: originalModel,
+          modified: modifiedModel
+        });
+      });
+
+      // Show overlay
+      diffOverlayEl.style.display = 'flex';
+    }catch(e){
+      showToast('Failed to load diff');
+      console.error('Diff editor error:', e);
+    }
+  }
+
+  function closeDiffEditor(){
+    if(diffEditor){
+      try{
+        // Dispose models
+        const model = diffEditor.getModel();
+        if(model){
+          if(model.original) model.original.dispose();
+          if(model.modified) model.modified.dispose();
+        }
+        diffEditor.dispose();
+      }catch(e){}
+      diffEditor = null;
+    }
+    diffEditorPath = null;
+    diffHistoricalContent = null;
+    diffOverlayEl.style.display = 'none';
+  }
+
+  function showRestoreConfirmation(){
+    confirmMessageEl.textContent = `This will overwrite the current file "${diffEditorPath}" with the historical version.`;
+    confirmModalEl.style.display = 'flex';
+  }
+
+  async function restoreHistoricalVersion(){
+    if(!diffEditorPath || !diffHistoricalContent){
+      showToast('No historical version to restore');
+      return;
+    }
+
+    try{
+      // Save historical content to current file
+      const res = await fetchJSON('/file/save', {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({
+          path: diffEditorPath,
+          content: diffHistoricalContent
+        })
+      });
+
+      showToast(`Restored: ${diffEditorPath}`);
+
+      // Close modal and diff overlay
+      confirmModalEl.style.display = 'none';
+      closeDiffEditor();
+
+      // Refresh tile content
+      await refreshTileContent(diffEditorPath);
+
+      // Flash the tile to show it was updated
+      flashTile(diffEditorPath, 'update');
+    }catch(e){
+      showToast(`Failed to restore: ${e.message || e}`);
+      console.error('Restore failed:', e);
+    }
+  }
+
   const tiles = new Map(); // path -> tile DOM
   const editors = new Map(); // path -> monaco editor
   const pendingFocus = new Map(); // path -> {line, token}
@@ -732,6 +875,9 @@
     const tile = tiles.get(path);
     if(!tile) return;
 
+    const title = tile.querySelector('.title .right');
+    if(!title) return;
+
     // Setup download button (historical mode only)
     const dlBtn = tile.querySelector('.dlbtn');
     if(dlBtn){
@@ -748,6 +894,28 @@
         openOverlayEditor(path);
       };
     }
+
+    // Setup diff button (historical mode only) - create if doesn't exist
+    let diffBtn = tile.querySelector('.diffbtn');
+    if(!diffBtn){
+      diffBtn = document.createElement('button');
+      diffBtn.className = 'btn tiny diffbtn';
+      diffBtn.title = 'Diff from Live';
+      diffBtn.textContent = '⇄';
+      // Insert before lang/updated spans
+      const lang = title.querySelector('.lang');
+      if(lang){
+        title.insertBefore(diffBtn, lang);
+      } else {
+        title.appendChild(diffBtn);
+      }
+    }
+    diffBtn.style.display = (currentAsOfMs != null) ? 'inline-block' : 'none';
+    diffBtn.onclick = (ev)=>{
+      ev.preventDefault();
+      ev.stopPropagation();
+      openDiffEditor(path);
+    };
 
     if(!dlBtn) return;
 
@@ -1262,15 +1430,38 @@
     cancelOverlayBtn.onclick = ()=> closeOverlayEditor();
   }
 
-  // Double-click on tiles to open editor (live mode only)
+  // Diff overlay controls
+  if(closeDiffBtn){
+    closeDiffBtn.onclick = ()=> closeDiffEditor();
+  }
+  if(restoreDiffBtn){
+    restoreDiffBtn.onclick = ()=> showRestoreConfirmation();
+  }
+
+  // Confirmation modal controls
+  if(confirmRestoreBtn){
+    confirmRestoreBtn.onclick = ()=> restoreHistoricalVersion();
+  }
+  if(cancelRestoreBtn){
+    cancelRestoreBtn.onclick = ()=> {
+      confirmModalEl.style.display = 'none';
+    };
+  }
+
+  // Double-click on tiles: open editor (live) or diff (historical)
   canvas.addEventListener('dblclick', (e)=>{
-    if(currentAsOfMs != null) return; // Only in live mode
     const tileEl = e.target.closest('.tile');
     if(!tileEl) return;
     // Find path for this tile
     for(const [path, tile] of tiles){
       if(tile === tileEl){
-        openOverlayEditor(path);
+        if(currentAsOfMs != null){
+          // Historical mode: open diff editor
+          openDiffEditor(path);
+        } else {
+          // Live mode: open overlay editor
+          openOverlayEditor(path);
+        }
         break;
       }
     }

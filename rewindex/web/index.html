@@ -88,6 +88,26 @@
     </div>
     <div id="overlayEditorContainer" class="overlay-editor-container"></div>
   </div>
+  <div id="diffOverlay" class="overlay-editor" style="display:none;">
+    <div class="overlay-header">
+      <span id="diffFilePath" class="overlay-file-path"></span>
+      <div class="overlay-controls">
+        <button id="restoreDiff" class="btn overlay-btn">Restore Historical Version</button>
+        <button id="closeDiff" class="btn overlay-btn cancel">Close</button>
+      </div>
+    </div>
+    <div id="diffEditorContainer" class="overlay-editor-container"></div>
+  </div>
+  <div id="confirmModal" class="modal" style="display:none;">
+    <div class="modal-content">
+      <h3>Restore Historical Version?</h3>
+      <p id="confirmMessage">This will overwrite the current file with the historical version.</p>
+      <div class="modal-buttons">
+        <button id="confirmRestore" class="btn modal-btn">Restore</button>
+        <button id="cancelRestore" class="btn modal-btn cancel">Cancel</button>
+      </div>
+    </div>
+  </div>
   <div id="toasts" class="toasts"></div>
   <script src="/static/app.js"></script>
 </body>
