@@ -7,6 +7,8 @@ __pycache__/
 *.so
 .claude/
 .claude-debug/
+.rewindex.json
+.scope.json
 
 # Distribution / packaging
 .Python

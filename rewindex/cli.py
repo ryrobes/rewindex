@@ -214,6 +214,7 @@ def cmd_search(args: argparse.Namespace) -> int:
             payload = {
                 "source": "cli",
                 "timestamp_ms": __import__('time').time() * 1000,
+                "project_root": str(root),  # Send the CLI's project root
                 "query": args.query,
                 "filters": {
                     "language": args.lang,
@@ -341,9 +342,10 @@ def cmd_find_todos(args: argparse.Namespace) -> int:
 def cmd_serve(args: argparse.Namespace) -> int:
     host = args.host
     port = args.port
+    beads_root = args.beads_root if hasattr(args, 'beads_root') else None
     try:
         from .api_server import run
-        run(host=host, port=port)
+        run(host=host, port=port, beads_root=beads_root)
     except KeyboardInterrupt:
         pass
     return 0
@@ -1007,6 +1009,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp_srv = sub.add_parser("serve", help="Run the HTTP API + UI server")
     sp_srv.add_argument("--host", default="127.0.0.1", help="Bind host (default: 127.0.0.1)")
     sp_srv.add_argument("--port", type=int, default=8899, help="Port (default: 8899)")
+    sp_srv.add_argument("--beads-root", help="Directory for beads integration (defaults to server's working directory)")
     sp_srv.set_defaults(func=cmd_serve)
 
     # history/show/diff

@@ -61,6 +61,7 @@ class RewindexHandler(BaseHTTPRequestHandler):
     server_version = "rewindex-http/0.1"
     watcher_thread: threading.Thread | None = None
     watcher_stop: threading.Event | None = None
+    beads_root: Path | None = None  # Optional beads working directory
 
     def do_GET(self) -> None:  # noqa: N802
         root = find_project_root(Path.cwd())
@@ -324,6 +325,103 @@ class RewindexHandler(BaseHTTPRequestHandler):
             _json_response(self, 200, {"queries": items})
             return
 
+        # Beads integration endpoints
+        if path_only == "/beads/check":
+            import subprocess
+            try:
+                result = subprocess.run(
+                    ["which", "bd"],
+                    capture_output=True,
+                    text=True,
+                    timeout=2
+                )
+                available = result.returncode == 0
+                _json_response(self, 200, {"available": available})
+            except Exception:
+                _json_response(self, 200, {"available": False})
+            return
+
+        if path_only == "/beads/list":
+            import subprocess
+            import sys
+            # Priority: beads_root (if set) > query param > server root
+            if RewindexHandler.beads_root:
+                work_dir = RewindexHandler.beads_root
+            else:
+                work_dir = qs.get("project_root", [None])[0]
+                if work_dir:
+                    work_dir = Path(unquote(work_dir))
+                    if not work_dir.is_dir():
+                        _json_response(self, 400, {"error": f"Invalid project_root: {work_dir}"})
+                        return
+                else:
+                    work_dir = root
+
+            # Debug logging
+            print(f"[beads/list DEBUG] cwd={work_dir}", file=sys.stderr)
+            print(f"[beads/list DEBUG] query_param={qs.get('project_root', [None])[0]}", file=sys.stderr)
+            print(f"[beads/list DEBUG] beads_root={RewindexHandler.beads_root}", file=sys.stderr)
+
+            try:
+                result = subprocess.run(
+                    ["bd", "list", "--json"],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                    cwd=str(work_dir)
+                )
+
+                # Debug logging
+                print(f"[beads/list DEBUG] returncode={result.returncode}", file=sys.stderr)
+                print(f"[beads/list DEBUG] stdout={result.stdout[:200]}", file=sys.stderr)
+                print(f"[beads/list DEBUG] stderr={result.stderr[:200]}", file=sys.stderr)
+
+                if result.returncode == 0:
+                    parsed = json.loads(result.stdout) if result.stdout and result.stdout.strip() else []
+                    # Handle case where bd returns JSON null or non-list
+                    tickets = parsed if isinstance(parsed, list) else []
+                    print(f"[beads/list DEBUG] ticket_count={len(tickets)}", file=sys.stderr)
+                    _json_response(self, 200, {"tickets": tickets, "_debug": {"cwd": str(work_dir), "count": len(tickets)}})
+                else:
+                    # bd list failed - likely not a beads project, return empty list instead of error
+                    print(f"[beads/list DEBUG] bd list failed (not a beads project?)", file=sys.stderr)
+                    _json_response(self, 200, {"tickets": [], "_debug": {"cwd": str(work_dir), "error": result.stderr or "bd list failed"}})
+            except Exception as e:
+                print(f"[beads/list DEBUG] exception={e}", file=sys.stderr)
+                _json_response(self, 500, {"error": str(e), "_debug": {"cwd": str(work_dir)}})
+            return
+
+        if path_only == "/beads/ready":
+            import subprocess
+            # Priority: beads_root (if set) > query param > server root
+            if RewindexHandler.beads_root:
+                work_dir = RewindexHandler.beads_root
+            else:
+                work_dir = qs.get("project_root", [None])[0]
+                if work_dir:
+                    work_dir = Path(unquote(work_dir))
+                    if not work_dir.is_dir():
+                        _json_response(self, 400, {"error": f"Invalid project_root: {work_dir}"})
+                        return
+                else:
+                    work_dir = root
+            try:
+                result = subprocess.run(
+                    ["bd", "ready", "--json"],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                    cwd=str(work_dir)
+                )
+                if result.returncode == 0:
+                    tickets = json.loads(result.stdout) if result.stdout.strip() else []
+                    _json_response(self, 200, {"tickets": tickets})
+                else:
+                    _json_response(self, 500, {"error": result.stderr or "bd ready failed"})
+            except Exception as e:
+                _json_response(self, 500, {"error": str(e)})
+            return
+
         self.send_error(404, "Not found")
 
     def do_POST(self) -> None:  # noqa: N802
@@ -465,6 +563,140 @@ class RewindexHandler(BaseHTTPRequestHandler):
                 _json_response(self, 500, {"error": str(e)})
             return
 
+        # Beads POST endpoints
+        if self.path == "/beads/create":
+            import subprocess
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+                body = self.rfile.read(length) if length else b"{}"
+                payload = json.loads(body.decode("utf-8"))
+                title = payload.get("title")
+                if not title:
+                    _json_response(self, 400, {"error": "Missing title"})
+                    return
+
+                # Priority: beads_root (if set) > request body > server root
+                if RewindexHandler.beads_root:
+                    work_dir = RewindexHandler.beads_root
+                else:
+                    work_dir = payload.get("project_root")
+                    if work_dir:
+                        work_dir = Path(work_dir)
+                        if not work_dir.is_dir():
+                            _json_response(self, 400, {"error": f"Invalid project_root: {work_dir}"})
+                            return
+                    else:
+                        work_dir = root
+
+                cmd = ["bd", "create", title, "--json"]
+                priority = payload.get("priority")
+                if priority is not None:
+                    cmd.extend(["--priority", str(priority)])
+                issue_type = payload.get("type")
+                if issue_type:
+                    cmd.extend(["--type", issue_type])
+
+                result = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                    cwd=str(work_dir)
+                )
+                if result.returncode == 0:
+                    ticket = json.loads(result.stdout) if result.stdout.strip() else {}
+                    _json_response(self, 200, {"ticket": ticket})
+                else:
+                    _json_response(self, 500, {"error": result.stderr or "bd create failed"})
+            except Exception as e:
+                _json_response(self, 500, {"error": str(e)})
+            return
+
+        if self.path == "/beads/update":
+            import subprocess
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+                body = self.rfile.read(length) if length else b"{}"
+                payload = json.loads(body.decode("utf-8"))
+                ticket_id = payload.get("id")
+                status = payload.get("status")
+                if not ticket_id:
+                    _json_response(self, 400, {"error": "Missing id"})
+                    return
+
+                # Priority: beads_root (if set) > request body > server root
+                if RewindexHandler.beads_root:
+                    work_dir = RewindexHandler.beads_root
+                else:
+                    work_dir = payload.get("project_root")
+                    if work_dir:
+                        work_dir = Path(work_dir)
+                        if not work_dir.is_dir():
+                            _json_response(self, 400, {"error": f"Invalid project_root: {work_dir}"})
+                            return
+                    else:
+                        work_dir = root
+
+                cmd = ["bd", "update", ticket_id, "--json"]
+                if status:
+                    cmd.extend(["--status", status])
+
+                result = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                    cwd=str(work_dir)
+                )
+                if result.returncode == 0:
+                    ticket = json.loads(result.stdout) if result.stdout.strip() else {}
+                    _json_response(self, 200, {"ticket": ticket})
+                else:
+                    _json_response(self, 500, {"error": result.stderr or "bd update failed"})
+            except Exception as e:
+                _json_response(self, 500, {"error": str(e)})
+            return
+
+        if self.path == "/beads/close":
+            import subprocess
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+                body = self.rfile.read(length) if length else b"{}"
+                payload = json.loads(body.decode("utf-8"))
+                ticket_id = payload.get("id")
+                if not ticket_id:
+                    _json_response(self, 400, {"error": "Missing id"})
+                    return
+
+                # Priority: beads_root (if set) > request body > server root
+                if RewindexHandler.beads_root:
+                    work_dir = RewindexHandler.beads_root
+                else:
+                    work_dir = payload.get("project_root")
+                    if work_dir:
+                        work_dir = Path(work_dir)
+                        if not work_dir.is_dir():
+                            _json_response(self, 400, {"error": f"Invalid project_root: {work_dir}"})
+                            return
+                    else:
+                        work_dir = root
+
+                result = subprocess.run(
+                    ["bd", "close", ticket_id, "--json"],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                    cwd=str(work_dir)
+                )
+                if result.returncode == 0:
+                    ticket = json.loads(result.stdout) if result.stdout.strip() else {}
+                    _json_response(self, 200, {"ticket": ticket})
+                else:
+                    _json_response(self, 500, {"error": result.stderr or "bd close failed"})
+            except Exception as e:
+                _json_response(self, 500, {"error": str(e)})
+            return
+
         self.send_error(404, "Not found")
 
     # Static file serving helper
@@ -489,7 +721,16 @@ class RewindexHandler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
 
-def run(host: str = "127.0.0.1", port: int = 8899) -> None:
+def run(host: str = "127.0.0.1", port: int = 8899, beads_root: str | None = None) -> None:
+    # Set beads_root on handler class if provided
+    if beads_root:
+        beads_path = Path(beads_root)
+        if not beads_path.is_dir():
+            print(f"[rewindex] ERROR: beads-root directory does not exist: {beads_root}")
+            return
+        RewindexHandler.beads_root = beads_path
+        print(f"[rewindex] Beads root: {beads_path}")
+
     httpd = ThreadingHTTPServer((host, port), RewindexHandler)
     print(f"[rewindex] HTTP server on http://{host}:{port}")
     try:

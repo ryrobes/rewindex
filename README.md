@@ -1,12 +1,9 @@
 Rewindex – Local Code Search (Elasticsearch)
 
-This implements the core features from FRD.md (Phase 1) using a local Elasticsearch instance for indexing and search.
-
 - Index files into Elasticsearch with per-file current doc + version history
 - Extract simple metadata (imports, functions, classes, TODOs)
 - CLI for indexing and search (speaks to ES)
 - Minimal HTTP server exposing simple search and index status
-
 
 Notes
 

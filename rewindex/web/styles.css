@@ -1,6 +1,6 @@
 :root {
   /* Ayu Dark inspired */
-  --bg: #0f1419;
+  --bg: #090c0f;
   --panel: #131721;
   --text: #b3b1ad;
   --muted: #5c6a72;
@@ -79,7 +79,9 @@ body {
   top: 24px;
   left: 50%;
   transform: translateX(-50%);
+  background-color: #090c0f;
   width: 500px;
+  user-select: none;
   max-width: calc(100vw - 400px);
   display: flex;
   align-items: center;
@@ -94,8 +96,9 @@ body {
   font-size: 18px;
   font-family: 'Fira Code', monospace;
   font-weight: 400;
-  color: #e6e6e6;
-  background: rgba(19, 23, 33, 0.85);
+  user-select: none;
+  color: #e6e6e699;
+  background-color: #090c0f77;
   border: 1px solid rgba(57, 186, 230, 0.3);
   border-radius: 12px;
   outline: none;
@@ -330,6 +333,9 @@ body {
 
 #asofFloat .btn.live {
   margin-left: auto;
+  color: #39bae6;
+  background-color: #00000099;
+  backdrop-filter: blur(8px);
 }
 
 #scrubWrap {
@@ -380,23 +386,28 @@ body {
 
 .folder {
   position: absolute;
-  border: 1px dashed var(--border);
-  border-radius: 10px;
-  background: rgba(255, 255, 255, 0.04);
+  border: 1px dashed rgba(57, 186, 230, 0.2);
+  border-radius: 12px;
+  user-select: none;
+  background: rgba(255, 255, 255, 0.03);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.02);
 }
 
 .folder .label {
   position: absolute;
-  top: -16px;
-  left: 8px;
-  font-size: 14px;
-  color: var(--muted);
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 3px 8px;
+  top: 10px;
+  left: 20px;
+  font-size: 40px;
+  font-weight: 600;
+  user-select: none;
+  color: var(--accent);
+  background: rgba(19, 23, 33, 0.95);
+  border: 1px solid rgba(57, 186, 230, 0.3);
+  border-radius: 8px;
+  padding: 6px 14px;
   z-index: 2;
   transition: all 0.2s ease;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
 }
 
 .section {
@@ -965,6 +976,69 @@ body {
   padding: 8px;
 }
 
+.prism-code {
+  font-family: 'Fira Code', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, Liberation Mono, monospace;
+  white-space: pre;
+  overflow: auto;
+  font-size: 12px;
+  padding: 8px;
+  margin: 0;
+  background: transparent !important;
+  height: 100%;
+}
+
+.prism-code code {
+  font-family: 'Fira Code', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, Liberation Mono, monospace;
+  background: transparent !important;
+  color: #b3b1ad;
+}
+
+/* Line highlighting for search results */
+.line-numbers-rows > span.highlight-line {
+  background-color: rgba(255, 223, 0, 0.25) !important;
+  border-left: 3px solid #ffdf00 !important;
+  animation: highlightPulse 0.4s ease-in-out 1;
+}
+
+@keyframes highlightPulse {
+  0% { background-color: rgba(255, 223, 0, 0.45); }
+  50% { background-color: rgba(255, 223, 0, 0.35); }
+  100% { background-color: rgba(255, 223, 0, 0.25); }
+}
+
+.line-numbers-rows > span.highlight-line-fade {
+  background-color: rgba(255, 223, 0, 0.15) !important;
+  border-left: 3px solid rgba(255, 223, 0, 0.5) !important;
+  transition: background-color 2s ease, border-left-color 2s ease;
+}
+
+/* Search term highlighting within code */
+.search-highlight {
+  background-color: rgba(80, 250, 123, 0.25) !important;
+  color: #50fa7b !important;
+  border-radius: 3px;
+  padding: 1px 3px;
+  font-weight: 600;
+  box-shadow: 0 0 4px rgba(80, 250, 123, 0.3);
+}
+
+.editor-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: var(--muted);
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  user-select: none;
+}
+
+.editor-placeholder:hover {
+  color: var(--accent);
+  background: rgba(57, 186, 230, 0.05);
+}
+
 .monaco-editor .match-line {
   background-color: rgba(255, 223, 0, 0.15);
 }
@@ -1137,4 +1211,255 @@ body {
 .modal-btn.cancel:hover {
   background: rgba(92, 106, 114, 0.3);
   color: var(--text);
+}
+
+/* Beads Panel (right side) */
+.beads-panel {
+  position: fixed;
+  right: 0;
+  top: 0;
+  max-height: calc(100vh - 80px); /* Leave room for timeline (60px) + margin */
+  width: 350px;
+  background: #13172199;
+  backdrop-filter: blur(8px);
+  border-left: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  border-bottom-left-radius: 12px;
+  padding: 16px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  z-index: 100;
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  transition: transform 0.3s ease;
+}
+
+.beads-panel.collapsed {
+  transform: translateX(100%);
+}
+
+.beads-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.beads-header h3 {
+  margin: 0;
+  font-size: 16px;
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.beads-toggle-btn {
+  background: rgba(57, 186, 230, 0.15);
+  color: var(--accent);
+  border: 1px solid rgba(57, 186, 230, 0.25);
+  border-radius: 6px;
+  padding: 4px 10px;
+  cursor: pointer;
+  font-size: 16px;
+  transition: all 0.2s ease;
+}
+
+.beads-toggle-btn:hover {
+  background: rgba(57, 186, 230, 0.25);
+}
+
+.beads-panel.collapsed .beads-toggle-btn {
+  transform: rotate(180deg);
+}
+
+.beads-content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.beads-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+
+.beads-filter-btn {
+  padding: 4px 10px;
+  font-size: 11px;
+  font-weight: 500;
+  background: rgba(92, 106, 114, 0.15);
+  color: var(--muted);
+  border: 1px solid rgba(92, 106, 114, 0.25);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  box-shadow: none;
+}
+
+.beads-filter-btn:hover {
+  background: rgba(92, 106, 114, 0.25);
+  color: var(--text);
+}
+
+.beads-filter-btn.active {
+  background: rgba(57, 186, 230, 0.2);
+  color: var(--accent);
+  border-color: rgba(57, 186, 230, 0.5);
+}
+
+.beads-tickets {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+.beads-loading {
+  text-align: center;
+  padding: 20px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.beads-ticket {
+  background: rgba(19, 23, 33, 0.6);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px;
+  margin-bottom: 8px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.beads-ticket:hover {
+  background: rgba(19, 23, 33, 0.85);
+  border-color: rgba(57, 186, 230, 0.3);
+}
+
+.beads-ticket-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.beads-ticket-id {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--muted);
+  font-family: 'Fira Code', monospace;
+}
+
+.beads-ticket-badges {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.beads-ticket-badge {
+  font-size: 9px;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: 3px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.beads-ticket-badge.status-open {
+  background: rgba(255, 184, 108, 0.2);
+  color: #ffb86c;
+}
+
+.beads-ticket-badge.status-in_progress {
+  background: rgba(57, 186, 230, 0.2);
+  color: #39bae6;
+}
+
+.beads-ticket-badge.status-closed {
+  background: rgba(92, 106, 114, 0.2);
+  color: var(--muted);
+}
+
+.beads-ticket-badge.priority-0,
+.beads-ticket-badge.priority-1 {
+  background: rgba(92, 106, 114, 0.2);
+  color: var(--muted);
+}
+
+.beads-ticket-badge.priority-2 {
+  background: rgba(255, 184, 108, 0.2);
+  color: #ffb86c;
+}
+
+.beads-ticket-badge.priority-3 {
+  background: rgba(255, 135, 85, 0.2);
+  color: #ff8755;
+}
+
+.beads-ticket-badge.priority-4 {
+  background: rgba(255, 85, 85, 0.2);
+  color: #ff5555;
+}
+
+.beads-ticket-title {
+  font-size: 13px;
+  color: var(--text);
+  font-weight: 500;
+  line-height: 1.4;
+  margin-bottom: 4px;
+}
+
+.beads-ticket-meta {
+  font-size: 10px;
+  color: var(--muted);
+  display: flex;
+  gap: 8px;
+}
+
+.beads-ticket-type {
+  text-transform: capitalize;
+}
+
+.beads-empty {
+  text-align: center;
+  padding: 40px 20px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+/* Beads panel toggle button (tab on right edge when collapsed) */
+.beads-panel-tab {
+  position: fixed;
+  right: 0;
+  top: 16px;
+  min-width: 40px;
+  background: rgba(57, 186, 230, 0.2);
+  color: var(--accent);
+  border: 1px solid rgba(57, 186, 230, 0.3);
+  border-right: none;
+  border-radius: 20px 0 0 20px;
+  padding: 8px 12px 8px 16px;
+  cursor: pointer;
+  font-size: 16px;
+  font-weight: 700;
+  font-family: 'Fira Code', monospace;
+  text-align: center;
+  z-index: 99;
+  transition: all 0.2s ease;
+  display: none;
+}
+
+.beads-panel.collapsed ~ .beads-panel-tab {
+  display: block;
+}
+
+.beads-panel-tab:hover {
+  background: rgba(57, 186, 230, 0.3);
+  padding-right: 16px;
+  transform: translateX(-4px);
 }

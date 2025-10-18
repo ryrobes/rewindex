@@ -40,6 +40,11 @@
   const confirmRestoreBtn = document.getElementById('confirmRestore');
   const cancelRestoreBtn = document.getElementById('cancelRestore');
   const confirmMessageEl = document.getElementById('confirmMessage');
+  const beadsPanelEl = document.getElementById('beadsPanel');
+  const beadsPanelToggleBtn = document.getElementById('beadsPanelToggle');
+  const beadsPanelTabBtn = document.getElementById('beadsPanelTab');
+  const beadsTicketsEl = document.getElementById('beadsTickets');
+  const beadsFilterBtns = document.querySelectorAll('.beads-filter-btn');
 
   let timelineMin = null, timelineMax = null;
   let currentAsOfMs = null;
@@ -53,7 +58,7 @@
   let fuzzyMode = false;
   let partialMode = false;
   let deletedMode = false;
-  let dynTextMode = false;
+  let dynTextMode = true; // Default ON for dynamic text sizing
   let languageColors = {}; // Map of language -> color
   let languageList = []; // Ordered list of discovered languages
   let recentUpdates = []; // Track recent file updates [{path, action, timestamp}]
@@ -63,6 +68,12 @@
   let diffEditor = null; // Monaco diff editor instance
   let diffEditorPath = null; // Current file path in diff mode
   let diffHistoricalContent = null; // Historical content for restore
+  let currentProjectRoot = null; // Current project root directory
+  let beadsAvailable = false; // Whether bd command is available
+  let beadsInitialized = false; // Whether beads has been checked
+  let beadsTickets = []; // All Beads tickets
+  let beadsCurrentFilter = 'all'; // Current filter
+  let beadsPollInterval = null; // Polling interval for Beads updates
 
   let scale = 1.0;
   let offsetX = 40;
@@ -88,8 +99,8 @@
     const worldX = (mouseX - offsetX) / scale;
     const worldY = (mouseY - offsetY) / scale;
 
-    const delta = -Math.sign(e.deltaY) * 0.12;
-    const newScale = Math.min(2.5, Math.max(0.2, scale + delta));
+    const delta = -Math.sign(e.deltaY) * 0.05;
+    const newScale = Math.min(2.5, Math.max(0.01, scale + delta));
     // Adjust offsets so the world point under the mouse stays fixed
     offsetX = mouseX - worldX * newScale;
     offsetY = mouseY - worldY * newScale;
@@ -147,6 +158,20 @@
       statusEl.innerHTML = '';
       function row(k,v){ const div=document.createElement('div'); div.className='kv'; const ks=document.createElement('span'); ks.className='k'; ks.textContent=k+':'; const vs=document.createElement('span'); vs.className='v'; vs.textContent=String(v??''); div.appendChild(ks); div.appendChild(vs); statusEl.appendChild(div); }
 
+      // Store current project root for beads integration
+      const projectRootChanged = s.project_root && s.project_root !== currentProjectRoot;
+      if(s.project_root){
+        console.log('[beads DEBUG] refreshStatus setting currentProjectRoot=', s.project_root);
+        currentProjectRoot = s.project_root;
+      }
+
+      // Initialize beads on first load after we have project root
+      if(currentProjectRoot && !beadsInitialized){
+        console.log('[beads DEBUG] First load - checking beads availability');
+        beadsInitialized = true;
+        checkBeadsAvailable();
+      }
+
       // Simplified status display
       row('Host', s.host);
       row('Root', s.project_root);
@@ -180,6 +205,9 @@
       // Clear dimming on all tiles
       for(const [,tile] of tiles){ tile.classList.remove('dim'); }
       for(const [,el] of folders){ el.classList.remove('dim'); }
+      // Clear tracking sets
+      if(window._dimmedTiles) window._dimmedTiles.clear();
+      if(window._dimmedFolders) window._dimmedFolders.clear();
       // Show recent updates when search is empty
       renderRecentUpdates();
       return;
@@ -216,12 +244,50 @@
     }
 
     const matches = new Set(results.map(r => r.file_path));
-    // Dim non-matching tiles and containers with no matches
-    for(const [p, tile] of tiles){ tile.classList.toggle('dim', !matches.has(p)); }
-    // dim folders with no matching tiles
+
+    // Dim non-matching tiles - only update tiles that changed state
+    // Track currently dimmed tiles to avoid unnecessary DOM operations
+    if(!window._dimmedTiles) window._dimmedTiles = new Set();
+    const currentlyDimmed = window._dimmedTiles;
+
+    // Add 'dim' to non-matches (only if not already dimmed)
+    for(const [p, tile] of tiles){
+      if(!matches.has(p)){
+        if(!currentlyDimmed.has(p)){
+          tile.classList.add('dim');
+          currentlyDimmed.add(p);
+        }
+      } else {
+        if(currentlyDimmed.has(p)){
+          tile.classList.remove('dim');
+          currentlyDimmed.delete(p);
+        }
+      }
+    }
+
+    // Dim folders with no matching tiles - same optimization
+    if(!window._dimmedFolders) window._dimmedFolders = new Set();
+    const currentlyDimmedFolders = window._dimmedFolders;
     const folderMatch = new Map();
-    for(const p of matches){ const f = fileFolder.get(p) || ''; folderMatch.set(f, true); }
-    for(const [fp, el] of folders){ el.classList.toggle('dim', !folderMatch.get(fp)); }
+    for(const p of matches){
+      const f = fileFolder.get(p) || '';
+      folderMatch.set(f, true);
+    }
+
+    for(const [fp, el] of folders){
+      const hasMatch = folderMatch.get(fp);
+      if(!hasMatch){
+        if(!currentlyDimmedFolders.has(fp)){
+          el.classList.add('dim');
+          currentlyDimmedFolders.add(fp);
+        }
+      } else {
+        if(currentlyDimmedFolders.has(fp)){
+          el.classList.remove('dim');
+          currentlyDimmedFolders.delete(fp);
+        }
+      }
+    }
     // Results list: per-file group with per-match lines
     results.forEach((r, idx)=>{
       const grp = document.createElement('div');
@@ -309,9 +375,11 @@
       file.onclick = ()=> {
         const tile = tiles.get(update.path);
         if(tile){
-          openTile(update.path).then(()=>{
+          openTile(update.path).then(async ()=>{
             centerOnTile(update.path);
-            loadEditor(update.path);
+            if(!tileContent.has(update.path)){
+              await loadTileContent(update.path);
+            }
             flashTile(update.path, 'focus');
           });
         }
@@ -353,6 +421,38 @@
     return 'just now';
   }
 
+  function defineMonacoTheme(){
+    // Define custom theme matching canvas background and Prism.js colors (Tomorrow Night)
+    if(typeof monaco === 'undefined') return;
+
+    monaco.editor.defineTheme('rewindex-dark', {
+      base: 'vs-dark',
+      inherit: true,
+      rules: [
+        // Tomorrow Night syntax colors to match Prism.js
+        { token: 'comment', foreground: '969896', fontStyle: 'italic' },
+        { token: 'keyword', foreground: 'b294bb' },
+        { token: 'string', foreground: 'b5bd68' },
+        { token: 'number', foreground: 'de935f' },
+        { token: 'regexp', foreground: 'de935f' },
+        { token: 'type', foreground: 'f0c674' },
+        { token: 'class', foreground: 'f0c674' },
+        { token: 'function', foreground: '81a2be' },
+        { token: 'variable', foreground: 'cc6666' },
+        { token: 'constant', foreground: 'de935f' },
+        { token: 'operator', foreground: '8abeb7' },
+      ],
+      colors: {
+        'editor.background': '#090c0f',  // Match canvas background
+        'editor.foreground': '#c5c8c6',  // Tomorrow Night foreground
+        'editor.lineHighlightBackground': '#1d1f21',
+        'editor.selectionBackground': '#373b41',
+        'editorCursor.foreground': '#c5c8c6',
+        'editorWhitespace.foreground': '#404040',
+      }
+    });
+  }
+
   async function openOverlayEditor(path){
     overlayEditorPath = path;
     overlayFilePathEl.textContent = path;
@@ -376,6 +476,9 @@
           try{ overlayEditor.dispose(); }catch(e){}
         }
 
+        // Define custom theme
+        defineMonacoTheme();
+
         // Calculate line count and dynamic font size
         const content = data.content || '';
         const lineCount = content.split('\n').length;
@@ -386,7 +489,7 @@
           language: normalizeLanguageForMonaco(data.language),
           readOnly: false,  // Editable!
           minimap: { enabled: true },
-          theme: 'ayu-dark',
+          theme: 'rewindex-dark',  // Use custom theme
           fontSize: fontSize,
           automaticLayout: true,
         });
@@ -454,25 +557,8 @@
       const liveData = await fetchJSON('/file?path=' + encodeURIComponent(path));
       const liveContent = liveData.content || '';
 
-      // Get historical version from tile editor
-      let historicalContent = '';
-      const ed = editors.get(path);
-      if(ed && ed.getModel){
-        const model = ed.getModel();
-        if(model){
-          historicalContent = model.getValue();
-        }
-      } else {
-        // Fallback to pre tag if Monaco didn't work
-        const tile = tiles.get(path);
-        if(tile){
-          const body = tile.querySelector('.body');
-          const pre = body && body.querySelector('pre.pre');
-          if(pre){
-            historicalContent = pre.textContent || '';
-          }
-        }
-      }
+      // Get historical version from tile content
+      let historicalContent = tileContent.get(path) || '';
 
       // Store historical content for restore
       diffHistoricalContent = historicalContent;
@@ -492,10 +578,13 @@
           try{ diffEditor.dispose(); }catch(e){}
         }
 
+        // Define custom theme
+        defineMonacoTheme();
+
         diffEditor = monaco.editor.createDiffEditor(diffEditorContainer, {
           readOnly: true,
           minimap: { enabled: true },
-          theme: 'ayu-dark',
+          theme: 'rewindex-dark',  // Use custom theme
           fontSize: 12,
           automaticLayout: true,
           renderSideBySide: true,
@@ -577,7 +666,7 @@
   }
 
   const tiles = new Map(); // path -> tile DOM
-  const editors = new Map(); // path -> monaco editor
+  const tileContent = new Map(); // path -> content string
   const pendingFocus = new Map(); // path -> {line, token}
   const folders = new Map(); // folderPath -> folder DOM
   const filePos = new Map(); // path -> {x,y}
@@ -604,6 +693,14 @@
     const title = document.createElement('div');
     title.className = 'title';
     title.innerHTML = `<span>${path}</span><span class="right"><button class="btn tiny editbtn" title="Edit" style="display:none;">✎</button><button class="btn tiny dlbtn" title="Download" style="display:none;">⬇</button><span class="lang"></span><span class="updated"></span></span>`;
+
+    // Dynamic header font size based on tile height (for treemap mode)
+    if(pos.h){
+      const headerFontSize = Math.max(8, Math.min(14, pos.h / 20)); // 8-14px based on height
+      title.style.fontSize = `${headerFontSize}px`;
+      title.style.padding = `${Math.max(2, headerFontSize * 0.3)}px ${Math.max(4, headerFontSize * 0.5)}px`;
+    }
+
     const body = document.createElement('div');
     body.className = 'body';
     tile.appendChild(title); tile.appendChild(body);
@@ -731,144 +828,245 @@
 
   function calculateDynamicFontSize(lineCount){
     // Returns font size based on file line count
-    // Small files: 14px, Large files: 8px
+    // Small files: 20px, Large files: 5px (wide range!)
     if(!dynTextMode) return 12; // Default font size when disabled
     if(!lineCount || lineCount <= 0) return 12;
 
     // Logarithmic scaling: bigger files get smaller font
-    // 1-100 lines: 14px
-    // 100-500 lines: 12px
-    // 500-1000 lines: 10px
-    // 1000-2000 lines: 9px
-    // 2000+ lines: 8px
-    const MIN_FONT = 8;
-    const MAX_FONT = 14;
+    // 1-50 lines: 20px (very readable)
+    // 50-200 lines: 16px
+    // 200-500 lines: 12px
+    // 500-1000 lines: 9px
+    // 1000-3000 lines: 7px
+    // 3000+ lines: 5px (tiny for huge files)
+    const MIN_FONT = 5;
+    const MAX_FONT = 20;
 
-    if(lineCount <= 100) return MAX_FONT;
-    if(lineCount >= 2000) return MIN_FONT;
+    if(lineCount <= 50) return MAX_FONT;
+    if(lineCount >= 3000) return MIN_FONT;
 
     // Logarithmic interpolation
-    const logMin = Math.log(100);
-    const logMax = Math.log(2000);
+    const logMin = Math.log(50);
+    const logMax = Math.log(3000);
     const logValue = Math.log(lineCount);
     const ratio = (logValue - logMin) / (logMax - logMin);
 
     return Math.round(MAX_FONT - (ratio * (MAX_FONT - MIN_FONT)));
   }
 
-  async function loadEditor(path, initData){
-    if(editors.has(path)) return editors.get(path);
+  function languageToPrism(lang){
+    // Map backend language names to Prism language identifiers
+    const prismMap = {
+      'javascript': 'javascript',
+      'typescript': 'typescript',
+      'python': 'python',
+      'java': 'java',
+      'c': 'c',
+      'cpp': 'cpp',
+      'csharp': 'csharp',
+      'go': 'go',
+      'rust': 'rust',
+      'ruby': 'ruby',
+      'php': 'php',
+      'swift': 'swift',
+      'kotlin': 'kotlin',
+      'scala': 'scala',
+      'html': 'markup',
+      'css': 'css',
+      'scss': 'scss',
+      'sass': 'sass',
+      'json': 'json',
+      'yaml': 'yaml',
+      'toml': 'toml',
+      'xml': 'markup',
+      'markdown': 'markdown',
+      'sql': 'sql',
+      'shell': 'bash',
+      'bash': 'bash',
+      'dockerfile': 'docker',
+      'makefile': 'makefile',
+      'unknown': 'plaintext'
+    };
+    return prismMap[lang] || lang || 'plaintext';
+  }
+
+  async function loadTileContent(path, initData, focusLine = null, searchQuery = null){
     let tile = tiles.get(path);
     if(!tile){ await openTile(path); tile = tiles.get(path); }
     const data = initData || await fetchJSON('/file?path=' + encodeURIComponent(path));
     const body = tile.querySelector('.body');
-    // Remove existing content
-    body.innerHTML = '';
+
     // Update language in title and apply color
     try{ tile.querySelector('.title .lang').textContent = data.language || ''; }catch(e){}
     try{ tile.querySelector('.title .updated').textContent = new Date().toLocaleTimeString(); }catch(e){}
 
-    // Store language for folder color calculation
+    // Store language and full content
     fileLanguages.set(path, data.language);
-
-    // Apply language-based color to tile
+    tileContent.set(path, data.content || '');
     applyLanguageColor(tile, data.language);
 
-    // Monaco (if available); else fallback to <pre>
-    if(typeof require === 'undefined'){
-      const pre = document.createElement('pre');
-      pre.className = 'pre';
-      pre.textContent = data.content || '';
-      body.appendChild(pre);
-      setupTileButtons(path);
-      return null;
-    }
-    try{
-      require.config({ paths: { 'vs': 'https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min/vs' } });
-      return await new Promise((resolve)=>{
-        let settled = false;
-        const finish = (editor)=>{ if(settled) return; settled = true; resolve(editor); };
-        const to = setTimeout(()=>{
-          if(settled) return;
-          // Fallback to <pre>
-          const pre = document.createElement('pre');
-          pre.className = 'pre';
-          pre.textContent = data.content || '';
-          body.appendChild(pre);
-          setupTileButtons(path);
-          finish(null);
-        }, 3000);
-        require(['vs/editor/editor.main'], function(){
-          if(settled) return;
-          clearTimeout(to);
-          try{
-            if(!window.__rewindexMonacoThemeSet){
-              monaco.editor.defineTheme('ayu-dark', {
-                base: 'vs-dark', inherit: true,
-                rules: [
-                  { token: '', foreground: 'B3B1AD' },
-                  { token: 'comment', foreground: '5C6773', fontStyle: 'italic' },
-                  { token: 'keyword', foreground: 'FF8F40' },
-                  { token: 'string', foreground: 'B8CC52' },
-                  { token: 'number', foreground: 'E6B450' },
-                  { token: 'type', foreground: '39BAE6' },
-                  { token: 'function', foreground: 'FFB454' }
-                ],
-                colors: {
-                  'editor.background': '#0f1419',
-                  'editor.foreground': '#b3b1ad',
-                  'editorCursor.foreground': '#f29718',
-                  'editorLineNumber.foreground': '#5c6773',
-                  'editorLineNumber.activeForeground': '#b3b1ad',
-                  'editor.selectionBackground': '#27374780',
-                  'editor.inactiveSelectionBackground': '#1d2b3680',
-                  'editor.lineHighlightBackground': '#11151b',
-                  'editorGutter.background': '#0f1419',
-                  'editorWidget.background': '#0b0e14'
-                }
-              });
-              window.__rewindexMonacoThemeSet = true;
-            }
-          }catch(e){}
-          // Calculate line count and dynamic font size
-          const content = data.content || '';
-          const lineCount = content.split('\n').length;
-          const fontSize = calculateDynamicFontSize(lineCount);
+    // Use Prism for syntax highlighting (lightweight, supports 1000s of instances)
+    const content = data.content || '';
+    const prismLang = languageToPrism(data.language);
+    const lines = content.split('\n');
+    const totalLines = lines.length;
 
-          const editor = monaco.editor.create(body, {
-            value: content,
-            language: normalizeLanguageForMonaco(data.language),
-            readOnly: true,
-            minimap: { enabled: false },
-            theme: 'ayu-dark',
-            fontSize: fontSize,
-            automaticLayout: true,
-          });
-          editors.set(path, editor);
-          const pf = pendingFocus.get(path);
-          if(pf){ revealAndDecorate(path, pf.line, pf.token); pendingFocus.delete(path); }
-          setupTileButtons(path);
-          finish(editor);
-        }, function(){
-          // Errback: fallback
-          if(settled) return;
-          clearTimeout(to);
-          const pre = document.createElement('pre');
-          pre.className = 'pre';
-          pre.textContent = data.content || '';
-          body.appendChild(pre);
-          setupTileButtons(path);
-          finish(null);
-        });
-      });
-    }catch(e){
-      const pre = document.createElement('pre');
-      pre.className = 'pre';
-      pre.textContent = data.content || '';
-      body.appendChild(pre);
-      setupTileButtons(path);
-      return null;
+    // CHUNKED RENDERING: Calculate chunk size based on tile height and dynamic font size
+    // This ensures the chunk fits nicely in the viewport
+    const fontSize = calculateDynamicFontSize(totalLines);
+    const lineHeight = fontSize * 1.4;
+    const tileHeight = tile.offsetHeight || 400;
+    const bodyHeight = tileHeight - 34; // Subtract title height
+
+    // Calculate how many lines fit in the viewport (with some buffer)
+    const visibleLines = Math.floor(bodyHeight / lineHeight);
+    const MAX_LINES_TO_RENDER = Math.max(100, Math.min(500, visibleLines * 3)); // 3x viewport, clamped 100-500
+
+    let startLine = 1;
+    let endLine = totalLines;
+
+    // Check if there's a pending focus for this path
+    const pending = pendingFocus.get(path);
+    if(pending && pending.line){
+      focusLine = pending.line;
+      pendingFocus.delete(path); // Clear after using
     }
+
+    if(totalLines > MAX_LINES_TO_RENDER){
+      if(focusLine && focusLine > 0){
+        // Center around the focus line
+        const halfChunk = Math.floor(MAX_LINES_TO_RENDER / 2);
+        startLine = Math.max(1, focusLine - halfChunk);
+        endLine = Math.min(totalLines, startLine + MAX_LINES_TO_RENDER - 1);
+
+        // Adjust if we're near the end
+        if(endLine - startLine + 1 < MAX_LINES_TO_RENDER && startLine > 1){
+          startLine = Math.max(1, endLine - MAX_LINES_TO_RENDER + 1);
+        }
+      } else {
+        // Just show first chunk
+        startLine = 1;
+        endLine = MAX_LINES_TO_RENDER;
+      }
+    }
+
+    // Extract the chunk to render
+    const chunkLines = lines.slice(startLine - 1, endLine);
+    const chunkContent = chunkLines.join('\n');
+    const chunkLineCount = chunkLines.length;
+
+    // fontSize already calculated above for chunk sizing
+
+    const pre = document.createElement('pre');
+    pre.className = 'prism-code line-numbers'; // Add line-numbers class
+    pre.style.fontSize = `${fontSize}px`;
+    pre.style.lineHeight = '1.4'; // Ensure readability
+    pre.style.userSelect = 'text'; // Allow text selection
+    pre.style.cursor = 'text'; // Show text cursor
+    pre.setAttribute('data-start', String(startLine)); // Line numbers start at actual line number!
+    pre.setAttribute('data-total-lines', String(totalLines)); // Store total for reference
+    pre.setAttribute('data-chunk-start', String(startLine));
+    pre.setAttribute('data-chunk-end', String(endLine));
+
+    const code = document.createElement('code');
+    code.className = `language-${prismLang}`;
+    code.style.fontSize = `${fontSize}px`; // Apply to code element too
+    code.textContent = chunkContent; // Only render the chunk!
+    pre.appendChild(code);
+
+    body.innerHTML = '';
+    body.appendChild(pre);
+
+    // Add chunk indicator if not showing full file
+    if(totalLines > MAX_LINES_TO_RENDER){
+      const indicator = document.createElement('div');
+      indicator.className = 'chunk-indicator';
+      indicator.textContent = `Showing lines ${startLine}-${endLine} of ${totalLines}`;
+      indicator.style.cssText = 'position:absolute; top:0; right:0; padding:2px 6px; font-size:9px; background:rgba(0,0,0,0.5); color:#888; z-index:10; pointer-events:none;';
+      body.style.position = 'relative';
+      body.appendChild(indicator);
+    }
+
+    // Highlight with Prism and enable line numbers
+    if(typeof Prism !== 'undefined'){
+      try{
+        Prism.highlightElement(code);
+      }catch(e){
+        // Prism not available or language not loaded
+      }
+    }
+
+    // Highlight search terms if provided
+    if(searchQuery && searchQuery.trim()){
+      highlightSearchTerms(code, searchQuery.trim());
+    }
+
+    // Scroll to focused line if provided
+    if(focusLine && focusLine > 0){
+      // Use a short delay to ensure Prism has finished rendering
+      setTimeout(() => {
+        scrollToLine(path, focusLine);
+      }, 100);
+    }
+
+    setupTileButtons(path);
+  }
+
+  function highlightSearchTerms(element, query){
+    // Escape regex special characters
+    const escapedQuery = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const regex = new RegExp(escapedQuery, 'gi');
+
+    // Find all text nodes and highlight matches
+    const walker = document.createTreeWalker(
+      element,
+      NodeFilter.SHOW_TEXT,
+      null,
+      false
+    );
+
+    const nodesToReplace = [];
+    let node;
+
+    while(node = walker.nextNode()){
+      const text = node.textContent;
+      if(regex.test(text)){
+        nodesToReplace.push(node);
+      }
+      regex.lastIndex = 0; // Reset regex
+    }
+
+    // Replace text nodes with highlighted versions
+    nodesToReplace.forEach(textNode => {
+      const text = textNode.textContent;
+      const fragment = document.createDocumentFragment();
+
+      let lastIndex = 0;
+      let match;
+      regex.lastIndex = 0;
+
+      while((match = regex.exec(text)) !== null){
+        // Add text before match
+        if(match.index > lastIndex){
+          fragment.appendChild(document.createTextNode(text.substring(lastIndex, match.index)));
+        }
+
+        // Add highlighted match
+        const mark = document.createElement('mark');
+        mark.className = 'search-highlight';
+        mark.textContent = match[0];
+        fragment.appendChild(mark);
+
+        lastIndex = match.index + match[0].length;
+      }
+
+      // Add remaining text
+      if(lastIndex < text.length){
+        fragment.appendChild(document.createTextNode(text.substring(lastIndex)));
+      }
+
+      textNode.parentNode.replaceChild(fragment, textNode);
+    });
   }
 
   function setupTileButtons(path){
@@ -926,27 +1124,10 @@
       ev.preventDefault();
       ev.stopPropagation();
 
-      let content = '';
+      // Get content from tile content map
+      const content = tileContent.get(path) || '';
 
-      // Try to get content from Monaco editor
-      const ed = editors.get(path);
-      if(ed && ed.getModel){
-        const model = ed.getModel();
-        if(model){
-          content = model.getValue();
-        }
-      }
-
-      // Fallback to pre tag if Monaco didn't work
-      if(!content){
-        const body = tile.querySelector('.body');
-        const pre = body && body.querySelector('pre.pre');
-        if(pre){
-          content = pre.textContent || '';
-        }
-      }
-
-      // If still no content, show error
+      // If no content, show error
       if(!content){
         showToast('Error: Could not retrieve file content');
         console.error('Download failed: no content found for', path);
@@ -997,26 +1178,7 @@
 
   async function refreshTileContent(path){
     try{
-      const data = await fetchJSON('/file?path=' + encodeURIComponent(path));
-      const ed = editors.get(path);
-      const tile = tiles.get(path);
-      if(ed && ed.getModel){
-        const model = ed.getModel();
-        if(model) model.setValue(data.content || '');
-      } else if(tile){
-        const body = tile.querySelector('.body');
-        const pre = body && body.querySelector('pre.pre');
-        if(pre) pre.textContent = data.content || '';
-      }
-      const title = tiles.get(path) && tiles.get(path).querySelector('.title');
-      if(title){
-        const up = title.querySelector('.updated');
-        if(up) up.textContent = new Date().toLocaleTimeString();
-      }
-      // Store language and apply color
-      fileLanguages.set(path, data.language);
-      applyLanguageColor(tile, data.language);
-      setupTileButtons(path);
+      await loadTileContent(path);
     }catch(e){ /* ignore */ }
   }
 
@@ -1049,97 +1211,203 @@
     // Clear old containers/positions
     for(const [, el] of folders){ el.remove(); }
     folders.clear(); filePos.clear(); fileFolder.clear();
-    const gap = 40, pad = 30, header = 0;
-    const tileW = 600, tileH = 400;
-    const maxRow = 2400; // wrap width
+
+    // Fixed, comfortable layout parameters
+    const tileW = 600;
+    const tileH = 400;
+    const gap = 40;
+    const pad = 60; // Generous padding inside folders
+    const header = 50; // Space for folder label
+
+    // Shelf packing with balanced aspect ratio: packs items wide AND tall
+    function packSkyline(children, gap, pad, header){
+      if(children.length === 0){
+        return { positions: new Map(), width: 2*pad, height: pad + header + pad };
+      }
+
+      // Calculate total area to determine optimal width for balanced aspect ratio
+      let totalArea = 0;
+      for(const child of children){
+        totalArea += (child.w + gap) * (child.h + gap);
+      }
+
+      // Target aspect ratio: square (1:1 - as wide as tall)
+      const targetWidth = Math.sqrt(totalArea * 1.0);
+      const maxShelfWidth = Math.max(targetWidth, 5000);
+
+      // Sort by height descending for better packing
+      const sorted = [...children].sort((a, b) => {
+        if(b.h !== a.h) return b.h - a.h;
+        return b.w - a.w;
+      });
+
+      const positions = new Map();
+
+      let currentX = pad;
+      let currentY = pad + header;
+      let currentShelfHeight = 0;
+
+      for(const child of sorted){
+        // Check if item fits in current shelf (accounting for gap)
+        if(currentX > pad && currentX + child.w > pad + maxShelfWidth){
+          // Start new shelf below
+          currentY += currentShelfHeight + gap;
+          currentX = pad;
+          currentShelfHeight = 0;
+        }
+
+        // Place item at current position
+        positions.set(child, { x: currentX, y: currentY });
+
+        // Move to next position
+        currentX += child.w + gap;
+
+        // Track tallest item in this shelf
+        currentShelfHeight = Math.max(currentShelfHeight, child.h);
+      }
+
+      // Calculate actual bounds
+      let maxRight = pad;
+      let maxBottom = pad + header;
+
+      for(const [child, pos] of positions){
+        maxRight = Math.max(maxRight, pos.x + child.w);
+        maxBottom = Math.max(maxBottom, pos.y + child.h);
+      }
+
+      return {
+        positions,
+        width: maxRight + pad,
+        height: maxBottom + pad
+      };
+    }
 
     function layoutNode(node, ox, oy, render=true){
-      // Compute child boxes sizes
+      // Collect all children (folders and files)
       const children = [];
+
+      // First, recursively layout all subfolders to get their sizes (bottom-up)
       for(const [name, sub] of node.folders){
-        const size = layoutNode(sub, 0, 0, false); // measure only
-        children.push({ type:'folder', node: sub, w: size.w, h: size.h });
+        const size = layoutNode(sub, 0, 0, false); // measure only, recursive
+        children.push({ type:'folder', node: sub, name, w: size.w, h: size.h });
       }
+
+      // Add files
       for(const fp of node.files){
         children.push({ type:'file', path: fp, w: tileW, h: tileH });
       }
+
       if(node !== root && children.length === 0){
-        // empty folder, minimal size
         children.push({ type:'spacer', w: tileW, h: tileH });
       }
-      // Position children within this container
-      const labelPadX = 0; // rely on top header spacing only
-      let x = pad + labelPadX, y = pad + header, rowH = 0, innerW = 0;
-      for(const ch of children){
-        if(x > pad + labelPadX && x + ch.w > pad + labelPadX + maxRow){
-          x = pad + labelPadX; y += rowH + gap; rowH = 0;
-        }
-        ch.x = x; ch.y = y; x += ch.w + gap; rowH = Math.max(rowH, ch.h); innerW = Math.max(innerW, ch.x + ch.w);
-      }
-      const innerH = (children.length ? (children[children.length-1].y + rowH) : (pad + header));
-      const W = Math.max(innerW + pad, tileW + 2*pad + labelPadX);
-      const H = Math.max(innerH + pad, header + 2*pad + tileH);
-      // Render container (skip root)
+
+      // Use Skyline bin packing for optimal space usage
+      const packed = packSkyline(children, gap, pad, header);
+
+      const W = packed.width;
+      const H = packed.height;
+
+      // Render folder container (skip root)
       if(render && node !== root){
         const div = document.createElement('div');
         div.className = 'folder';
-        div.style.left = `${ox}px`; div.style.top = `${oy}px`; div.style.width = `${W}px`; div.style.height = `${H}px`;
+        div.style.left = `${ox}px`;
+        div.style.top = `${oy}px`;
+        div.style.width = `${W}px`;
+        div.style.height = `${H}px`;
         const label = document.createElement('div');
-        label.className = 'label'; label.textContent = node.path || node.name;
+        label.className = 'label';
+        label.textContent = node.path || node.name;
         div.appendChild(label);
         canvas.appendChild(div);
         folders.set(node.path, div);
       }
-      // Assign child positions (absolute within canvas)
+
+      // Position children using packed positions
       for(const ch of children){
-        if(ch.type === 'folder'){
-          layoutNode(ch.node, ox + ch.x, oy + ch.y, render);
-        }else if(ch.type === 'file'){
-          if(render){
-            filePos.set(ch.path, { x: ox + ch.x, y: oy + ch.y });
-            const parent = node.path || '';
-            fileFolder.set(ch.path, parent);
+        const pos = packed.positions.get(ch);
+        if(pos){
+          ch.x = pos.x;
+          ch.y = pos.y;
+          if(ch.type === 'folder'){
+            layoutNode(ch.node, ox + ch.x, oy + ch.y, render);
+          }else if(ch.type === 'file'){
+            if(render){
+              filePos.set(ch.path, { x: ox + ch.x, y: oy + ch.y });
+              fileFolder.set(ch.path, node.path || '');
+            }
           }
         }
       }
+
       return { w: W, h: H };
     }
-    // Layout root's children in rows across the canvas
-    let cx = 0, cy = 0, rowH = 0;
+
+    // Layout root's children with dynamic square-based wrapping
     const topChildren = [];
     for(const [name, sub] of root.folders){ topChildren.push({type:'folder', node: sub}); }
     for(const f of root.files){ topChildren.push({type:'file', path: f}); }
+
+    // Measure all root children first
     for(const ch of topChildren){
       if(ch.type === 'folder'){
-        const size = layoutNode(ch.node, 0, 0, false); // measure
-        if(cx > 0 && cx + size.w > 3200){ cx = 0; cy += rowH + gap; rowH = 0; }
-        layoutNode(ch.node, cx, cy, true); // render
-        rowH = Math.max(rowH, size.h); cx += size.w + gap;
+        const size = layoutNode(ch.node, 0, 0, false);
+        ch.w = size.w;
+        ch.h = size.h;
       }else{
-        // Root-level file (no folder)
-        if(cx > 0 && cx + tileW + 2*pad > 3200){ cx = 0; cy += rowH + gap; rowH = 0; }
-        // For root files, assign position with a pseudo container-less placement
-        filePos.set(ch.path, { x: cx + pad, y: cy + pad + header });
-        fileFolder.set(ch.path, '');
-        cx += (tileW + 2*pad) + gap; rowH = Math.max(rowH, tileH + 2*pad + header);
+        ch.w = tileW;
+        ch.h = tileH;
       }
+    }
+
+    // Calculate total area and target square layout
+    let totalRootArea = 0;
+    for(const ch of topChildren){
+      totalRootArea += (ch.w + gap) * (ch.h + gap);
+    }
+
+    // Aim for square: calculate target width
+    const targetRootWidth = Math.sqrt(totalRootArea * 1.0);
+
+    // Use shelf packing at root level too
+    let cx = 0, cy = 0, rowH = 0;
+
+    for(const ch of topChildren){
+      // Check if we need to wrap
+      if(cx > 0 && cx + ch.w > targetRootWidth){
+        cx = 0;
+        cy += rowH + gap;
+        rowH = 0;
+      }
+
+      if(ch.type === 'folder'){
+        layoutNode(ch.node, cx, cy, true); // render
+      }else{
+        // Root-level file
+        filePos.set(ch.path, { x: cx, y: cy });
+        fileFolder.set(ch.path, '');
+      }
+
+      cx += ch.w + gap;
+      rowH = Math.max(rowH, ch.h);
     }
   }
 
   function layoutTreemap(paths){
-    // Shelf-packing treemap based on line_count or size_bytes
+    // Spiral/curved packing treemap - fills organically in swooping patterns
     // Clear old containers/positions
     for(const [, el] of folders){ el.remove(); }
     folders.clear(); filePos.clear(); fileFolder.clear();
 
-    // Gather files with sizes
+    // Gather files with sizes from metadata (NOT from rendered chunks)
+    // fileMeta contains the TOTAL line_count from the index/database
     const items = [];
     for(const p of paths){
       const meta = fileMeta.get(p) || {line_count: 1, size_bytes: 1};
       const size = sizeByBytes ? Math.max(1, meta.size_bytes || 1) : Math.max(1, meta.line_count || 1);
       items.push({
         path: p,
-        size: size
+        size: size  // Using TOTAL line count, not chunk size
       });
     }
 
@@ -1150,36 +1418,112 @@
 
     // Calculate total area and determine base tile size
     const totalSize = items.reduce((sum, item) => sum + item.size, 0);
-    const minTileW = 300, minTileH = 200;
-    const maxTileW = 800, maxTileH = 600;
+    const minTileW = 250, minTileH = 180; // Increased minimums for better text visibility
+    const maxTileW = 2200, maxTileH = 1571;
     const gap = 20;
-    const maxRowWidth = 3200; // Canvas wrap width
 
-    // Assign sizes based on relative size (using sqrt for more balanced sizing)
+    // DEBUG: Log size distribution
+    if(items.length > 0){
+      const sizes = items.map(i => i.size);
+      console.log('Treemap size stats:', {
+        min: Math.min(...sizes),
+        max: Math.max(...sizes),
+        avg: totalSize / items.length,
+        total: totalSize,
+        count: items.length,
+        samples: items.slice(0, 5).map(i => ({path: i.path, size: i.size}))
+      });
+    }
+
+    // Assign sizes based on relative size (better scaling without sqrt compression)
     const sizedItems = items.map(item => {
-      const ratio = Math.sqrt(item.size / totalSize);
-      const scale = Math.max(0.5, Math.min(2.0, ratio * 10)); // Scale factor between 0.5-2.0
+      // Use linear ratio with gentle power (sqrt was too compressive)
+      const ratio = item.size / totalSize;
+      const scale = Math.max(0.5, Math.min(4.0, Math.pow(ratio * items.length * 2, 0.6))); // Power 0.6 for gentle curve
       const w = Math.max(minTileW, Math.min(maxTileW, minTileW * scale));
       const h = Math.max(minTileH, Math.min(maxTileH, minTileH * scale));
-      return { ...item, w, h };
+      return { ...item, w, h, x: 0, y: 0 };
     });
 
-    // Shelf packing algorithm
-    let x = 0, y = 0, rowH = 0;
+    // Calculate target square layout
+    let totalArea = 0;
     for(const item of sizedItems){
-      // Check if we need to wrap to next row
-      if(x > 0 && x + item.w > maxRowWidth){
-        x = 0;
-        y += rowH + gap;
-        rowH = 0;
+      totalArea += (item.w + gap) * (item.h + gap);
+    }
+    const targetWidth = Math.sqrt(totalArea * 1.0); // Square aspect ratio
+
+    // Spiral/curved packing algorithm
+    // Track occupied regions as rectangles
+    const placed = [];
+
+    function intersects(x, y, w, h){
+      for(const p of placed){
+        if(!(x + w <= p.x || x >= p.x + p.w || y + h <= p.y || y >= p.y + p.h)){
+          return true;
+        }
+      }
+      return false;
+    }
+
+    // Find best position using spiral search pattern
+    function findBestPosition(w, h){
+      const candidates = [];
+
+      // Try corners of existing items (organic filling)
+      for(const p of placed){
+        // Below
+        candidates.push({ x: p.x, y: p.y + p.h + gap, dist: p.x + (p.y + p.h) });
+        // Right
+        candidates.push({ x: p.x + p.w + gap, y: p.y, dist: (p.x + p.w) + p.y });
+        // Diagonal (below-right)
+        candidates.push({ x: p.x + p.w + gap, y: p.y + p.h + gap, dist: (p.x + p.w) + (p.y + p.h) });
+        // Below-left of right edge (fills gaps)
+        candidates.push({ x: p.x, y: p.y + p.h + gap, dist: p.x + (p.y + p.h) });
       }
 
-      // Place tile with size information
-      filePos.set(item.path, { x, y, w: item.w, h: item.h });
-      fileFolder.set(item.path, ''); // No folders in treemap mode
+      // Sort by distance from origin (prefer top-left)
+      candidates.sort((a, b) => a.dist - b.dist);
 
-      x += item.w + gap;
-      rowH = Math.max(rowH, item.h);
+      // Find first non-intersecting position within target width
+      for(const c of candidates){
+        if(c.x + w <= targetWidth && !intersects(c.x, c.y, w, h)){
+          return { x: c.x, y: c.y };
+        }
+      }
+
+      // Fallback: find next available position in grid
+      let testY = 0;
+      while(testY < 20000){ // Reasonable limit
+        let testX = 0;
+        while(testX < targetWidth){
+          if(!intersects(testX, testY, w, h)){
+            return { x: testX, y: testY };
+          }
+          testX += gap;
+        }
+        testY += gap;
+      }
+
+      return { x: 0, y: 0 }; // Ultimate fallback
+    }
+
+    // Place items using spiral pattern
+    for(const item of sizedItems){
+      let pos;
+      if(placed.length === 0){
+        // First item at origin
+        pos = { x: 0, y: 0 };
+      } else {
+        pos = findBestPosition(item.w, item.h);
+      }
+
+      item.x = pos.x;
+      item.y = pos.y;
+      placed.push({ x: pos.x, y: pos.y, w: item.w, h: item.h });
+
+      // Place tile with size information
+      filePos.set(item.path, { x: item.x, y: item.y, w: item.w, h: item.h });
+      fileFolder.set(item.path, ''); // No folders in treemap mode
     }
   }
 
@@ -1191,17 +1535,31 @@
     const gap = 40, pad = 30, header = 0;
     const maxRow = 2400; // wrap width
 
-    function layoutNode(node, ox, oy, render=true){
+    // Track depth for alignment padding
+    const depthMap = new Map();
+    function calculateDepth(node, depth = 0){
+      if(node.path) depthMap.set(node.path, depth);
+      for(const [name, sub] of node.folders){
+        calculateDepth(sub, depth + 1);
+      }
+      for(const f of node.files){
+        depthMap.set(f, depth);
+      }
+    }
+    calculateDepth(root, 0);
+
+    function layoutNode(node, ox, oy, render=true, nodeDepth=0){
       // Compute child boxes with variable sizes for files
       const children = [];
 
       // Add folders first
       for(const [name, sub] of node.folders){
-        const size = layoutNode(sub, 0, 0, false); // measure only
-        children.push({ type:'folder', node: sub, w: size.w, h: size.h });
+        const subDepth = depthMap.get(sub.path) || nodeDepth + 1;
+        const size = layoutNode(sub, 0, 0, false, subDepth); // measure only
+        children.push({ type:'folder', node: sub, w: size.w, h: size.h, depth: subDepth });
       }
 
-      // Add files with treemap sizing
+      // Add files with treemap sizing (uses TOTAL line count from metadata, NOT chunk size)
       for(const fp of node.files){
         const meta = fileMeta.get(fp) || {line_count: 1, size_bytes: 1};
         const size = sizeByBytes ? Math.max(1, meta.size_bytes || 1) : Math.max(1, meta.line_count || 1);
@@ -1210,12 +1568,14 @@
           return sum + (sizeByBytes ? (m.size_bytes || 1) : (m.line_count || 1));
         }, 0);
 
-        const ratio = Math.sqrt(size / totalSize);
-        const scale = Math.max(0.5, Math.min(2.0, ratio * 8));
-        const w = Math.max(300, Math.min(800, 400 * scale));
-        const h = Math.max(200, Math.min(600, 300 * scale));
+        // Better scaling without sqrt compression
+        const ratio = size / totalSize;
+        const scale = Math.max(0.5, Math.min(4.0, Math.pow(ratio * node.files.length * 2, 0.6)));
+        const w = Math.max(250, Math.min(1400, 400 * scale)); // Increased minimum
+        const h = Math.max(180, Math.min(1000, 300 * scale)); // Increased minimum
 
-        children.push({ type:'file', path: fp, w, h });
+        const fileDepth = depthMap.get(fp) || nodeDepth;
+        children.push({ type:'file', path: fp, w, h, depth: fileDepth });
       }
 
       if(node !== root && children.length === 0){
@@ -1226,6 +1586,7 @@
       const labelPadX = 0;
       let x = pad + labelPadX, y = pad + header, rowH = 0, innerW = 0;
 
+      // First pass: initial positioning
       for(const ch of children){
         if(x > pad + labelPadX && x + ch.w > pad + labelPadX + maxRow){
           x = pad + labelPadX; y += rowH + gap; rowH = 0;
@@ -1236,7 +1597,34 @@
         innerW = Math.max(innerW, ch.x + ch.w);
       }
 
-      const innerH = (children.length ? (children[children.length-1].y + rowH) : (pad + header));
+      // Second pass: align items by depth within each row
+      // Group children by row (Y position)
+      const rows = new Map();
+      for(const ch of children){
+        if(!rows.has(ch.y)) rows.set(ch.y, []);
+        rows.get(ch.y).push(ch);
+      }
+
+      // For each row, find max depth and add padding to shallower items
+      // Depth padding = folder padding (30) + border (2) + label visual space (~8)
+      const DEPTH_PADDING = pad + 10; // ~40px per depth level
+      for(const [rowY, rowItems] of rows){
+        const maxDepthInRow = Math.max(...rowItems.map(item => item.depth || 0));
+        for(const item of rowItems){
+          const depthDiff = maxDepthInRow - (item.depth || 0);
+          if(depthDiff > 0){
+            // Add top padding to align with deeper neighbors
+            item.alignPadY = depthDiff * DEPTH_PADDING;
+            item.y += item.alignPadY;
+          }
+        }
+      }
+
+      // Calculate innerH as max of all children's bottom (accounting for alignment)
+      let innerH = pad + header;
+      for(const ch of children){
+        innerH = Math.max(innerH, ch.y + ch.h);
+      }
       const W = Math.max(innerW + pad, 400 + 2*pad + labelPadX);
       const H = Math.max(innerH + pad, header + 2*pad + 300);
 
@@ -1274,7 +1662,10 @@
     // Layout root's children in rows across the canvas
     let cx = 0, cy = 0, rowH = 0;
     const topChildren = [];
-    for(const [name, sub] of root.folders){ topChildren.push({type:'folder', node: sub}); }
+    for(const [name, sub] of root.folders){
+      const subDepth = depthMap.get(sub.path) || 1;
+      topChildren.push({type:'folder', node: sub, depth: subDepth});
+    }
     for(const f of root.files){
       const meta = fileMeta.get(f) || {line_count: 1, size_bytes: 1};
       const size = sizeByBytes ? Math.max(1, meta.size_bytes || 1) : Math.max(1, meta.line_count || 1);
@@ -1282,21 +1673,57 @@
       const scale = Math.max(0.5, Math.min(2.0, ratio * 5));
       const w = Math.max(300, Math.min(800, 400 * scale));
       const h = Math.max(200, Math.min(600, 300 * scale));
-      topChildren.push({type:'file', path: f, w, h});
+      const fileDepth = depthMap.get(f) || 0;
+      topChildren.push({type:'file', path: f, w, h, depth: fileDepth});
     }
 
+    // Position items and track rows
+    const rootPositions = [];
     for(const ch of topChildren){
       if(ch.type === 'folder'){
-        const size = layoutNode(ch.node, 0, 0, false); // measure
+        const size = layoutNode(ch.node, 0, 0, false, ch.depth); // measure
         if(cx > 0 && cx + size.w > 3200){ cx = 0; cy += rowH + gap; rowH = 0; }
-        layoutNode(ch.node, cx, cy, true); // render
+        ch.x = cx; ch.y = cy;
+        ch.w = size.w; ch.h = size.h;
+        rootPositions.push(ch);
         rowH = Math.max(rowH, size.h); cx += size.w + gap;
       }else{
         // Root-level file
         if(cx > 0 && cx + ch.w + 2*pad > 3200){ cx = 0; cy += rowH + gap; rowH = 0; }
-        filePos.set(ch.path, { x: cx + pad, y: cy + pad + header, w: ch.w, h: ch.h });
-        fileFolder.set(ch.path, '');
+        ch.x = cx + pad; ch.y = cy + pad + header;
+        rootPositions.push(ch);
         cx += (ch.w + 2*pad) + gap; rowH = Math.max(rowH, ch.h + 2*pad + header);
+      }
+    }
+
+    // Align root items by depth (same as nested items)
+    // Group by approximate Y with smaller bucket size for better accuracy
+    const rootRows = new Map();
+    for(const ch of rootPositions){
+      const rowKey = Math.floor(ch.y / 40) * 40; // Group by 40px buckets (gap size)
+      if(!rootRows.has(rowKey)) rootRows.set(rowKey, []);
+      rootRows.get(rowKey).push(ch);
+    }
+
+    const DEPTH_PADDING = pad + 10; // ~40px per depth level (matches nested items)
+    for(const [rowKey, rowItems] of rootRows){
+      const maxDepthInRow = Math.max(...rowItems.map(item => item.depth || 0));
+      for(const item of rowItems){
+        const depthDiff = maxDepthInRow - (item.depth || 0);
+        if(depthDiff > 0){
+          item.alignPadY = depthDiff * DEPTH_PADDING;
+          item.y += item.alignPadY;
+        }
+      }
+    }
+
+    // Final render with aligned positions
+    for(const ch of rootPositions){
+      if(ch.type === 'folder'){
+        layoutNode(ch.node, ch.x, ch.y, true, ch.depth); // render with aligned position
+      }else{
+        filePos.set(ch.path, { x: ch.x, y: ch.y, w: ch.w, h: ch.h });
+        fileFolder.set(ch.path, '');
       }
     }
   }
@@ -1370,6 +1797,9 @@
       resultsEl.innerHTML='';
       for(const [,tile] of tiles){ tile.classList.remove('dim'); }
       for(const [,el] of folders){ el.classList.remove('dim'); }
+      // Clear tracking sets
+      if(window._dimmedTiles) window._dimmedTiles.clear();
+      if(window._dimmedFolders) window._dimmedFolders.clear();
     }
   };
 
@@ -1386,21 +1816,18 @@
 
   // Dynamic Text toggle
   if(dynTextBtn){
+    // Set initial state (defaults to ON)
+    dynTextBtn.classList.toggle('active', dynTextMode);
+
     dynTextBtn.onclick = ()=>{
       dynTextMode = !dynTextMode;
       dynTextBtn.classList.toggle('active', dynTextMode);
 
-      // Update all existing editors with new font sizes
-      for(const [path, editor] of editors){
-        if(!editor || !editor.getModel) continue;
-        try{
-          const model = editor.getModel();
-          if(!model) continue;
-          const lineCount = model.getLineCount();
-          const fontSize = calculateDynamicFontSize(lineCount);
-          editor.updateOptions({ fontSize: fontSize });
-        }catch(e){
-          // Ignore errors
+      // Reload all tiles with new font sizes
+      for(const [path, tile] of tiles){
+        // Reload if we have content OR if tile is visible
+        if(tileContent.has(path) || tile.querySelector('.body')){
+          loadTileContent(path).catch(e => {/* ignore */});
         }
       }
 
@@ -1558,10 +1985,23 @@
     esrc.addEventListener('watcher', ()=> { refreshStatus(); refreshTimeline(); });
     esrc.addEventListener('index', ()=> { refreshStatus(); refreshTimeline(); });
     esrc.addEventListener('query', (ev)=>{
-      if(!followCliMode) return;
       try{
         const data = JSON.parse(ev.data || '{}');
         const payload = data.payload || data;
+
+        // Update project root if provided by CLI (regardless of follow mode)
+        if(payload.project_root && payload.project_root !== currentProjectRoot){
+          console.log('[beads DEBUG] CLI project_root changed from', currentProjectRoot, 'to', payload.project_root);
+          currentProjectRoot = payload.project_root;
+          // Refresh beads tickets for the new project
+          if(beadsAvailable){
+            console.log('[beads DEBUG] Refreshing beads tickets for new project');
+            refreshBeadsTickets();
+          }
+        }
+
+        if(!followCliMode) return;
+
         if(payload.query !== undefined) qEl.value = payload.query;
         // Align timeline to incoming query time (default live)
         const filt = payload.filters || {};
@@ -1621,9 +2061,9 @@
             const tile = tiles.get(path);
             if(tile){
               centerOnTile(path, { zoomToFit: true });
-              // Also load the editor if not already loaded
-              if(!editors.has(path)){
-                loadEditor(path);
+              // Also load the content if not already loaded
+              if(!tileContent.has(path)){
+                loadTileContent(path);
               }
             }
           }
@@ -1849,18 +2289,7 @@
     // Remove existing tiles
     for(const [p, tile] of tiles){ tile.remove(); }
 
-    // Properly dispose Monaco editors to prevent memory leaks
-    for(const [, editor] of editors){
-      if(editor && typeof editor.dispose === 'function'){
-        try{
-          editor.dispose();
-        }catch(e){
-          console.warn('Failed to dispose editor:', e);
-        }
-      }
-    }
-
-    tiles.clear(); editors.clear(); filePos.clear(); fileFolder.clear(); fileLanguages.clear();
+    tiles.clear(); tileContent.clear(); filePos.clear(); fileFolder.clear(); fileLanguages.clear();
     for(const [, el] of folders){ el.remove(); } folders.clear();
 
     // Use treemap (flat or with folders) or traditional layout based on mode
@@ -1873,56 +2302,29 @@
       const tree = buildTree(list);
       layoutAndRender(tree);
     }
-    // Spawn tiles
-    for(const p of list){ await openTile(p); }
-    // Load content concurrently (ensure Monaco for live and time-travel)
-    const concurrency = 2; let i = 0;
+    // Spawn and load tiles with Prism (lightweight, can handle 1000s)
+    const concurrency = 10;
+    let i = 0;
     async function next(){
-      if(i>=list.length) return;
+      if(i >= list.length) return;
       const p = list[i++];
       try{
-        if(ts==null){
+        await openTile(p);
+        if(ts == null){
           const data = await fetchJSON(`/file?path=${encodeURIComponent(p)}`);
-          const ed = editors.get(p);
-          if(!ed){ await loadEditor(p, data); }
-          else {
-            const model = ed.getModel && ed.getModel();
-            if(model) model.setValue(data.content||'');
-            const tile = tiles.get(p);
-            if(tile){
-              const l=tile.querySelector('.title .lang');
-              if(l) l.textContent = data.language||'';
-              fileLanguages.set(p, data.language);
-              applyLanguageColor(tile, data.language);
-            }
-          }
-          const up = tiles.get(p) && tiles.get(p).querySelector('.title .updated'); if(up) up.textContent = new Date().toLocaleTimeString();
-        }
-        else{
+          await loadTileContent(p, data);
+        } else {
           const data = await fetchJSON(`/file/at?path=${encodeURIComponent(p)}&ts=${ts}`);
-          const ed = editors.get(p);
-          if(!ed){ await loadEditor(p, data); }
-          else {
-            const model = ed.getModel && ed.getModel();
-            if(model) model.setValue(data.content||'');
-            setupTileButtons(p);
-          }
-          const tile = tiles.get(p);
-          if(tile){
-            const l=tile.querySelector('.title .lang');
-            if(l) l.textContent = data.language||'';
-            fileLanguages.set(p, data.language);
-            applyLanguageColor(tile, data.language);
-          }
-          const up = tiles.get(p) && tiles.get(p).querySelector('.title .updated'); if(up) up.textContent = ts ? new Date(ts).toLocaleTimeString() : new Date().toLocaleTimeString();
+          await loadTileContent(p, data);
         }
       }catch(e){ /* ignore */ }
       await next();
     }
-    const workers = []; for(let k=0;k<concurrency;k++) workers.push(next());
+    const workers = [];
+    for(let k = 0; k < concurrency; k++) workers.push(next());
     await Promise.all(workers);
 
-    // Apply folder colors and update language bar now that all file languages are loaded
+    // Apply folder colors and update language bar
     applyAllFolderColors();
     updateLanguageBar();
   }
@@ -1958,7 +2360,7 @@
     if(opts.zoomToFit !== false){
       const fitW = (ws.width * 0.65) / w;
       const fitH = (ws.height * 0.65) / h;
-      targetScale = Math.min(2.5, Math.max(0.2, Math.min(fitW, fitH)));
+      targetScale = Math.min(2.5, Math.max(0.05, Math.min(fitW, fitH)));
     }
 
     // Bias to the right by ~100px to account for sidebar coverage
@@ -1968,10 +2370,48 @@
     const targetOffsetX = (ws.width/2 + sidebarBias) - (targetScale * cx);
     const targetOffsetY = (ws.height/2) - (targetScale * cy);
 
-    animatePanZoom(targetOffsetX, targetOffsetY, targetScale, 500);
+    // FUN CINEMATIC ANIMATION: If already zoomed in, zoom out first, then pan, then zoom in
+    const ZOOM_THRESHOLD = 0.8; // Consider "zoomed in" if scale > 0.8
+    if(scale > ZOOM_THRESHOLD && targetScale > ZOOM_THRESHOLD){
+      // Do cinematic 3-stage animation
+      animatePanZoomCinematic(cx, cy, targetOffsetX, targetOffsetY, targetScale);
+    } else {
+      // Normal single-stage animation
+      animatePanZoom(targetOffsetX, targetOffsetY, targetScale, 500);
+    }
   }
 
-  function animatePanZoom(toX, toY, toScale, duration=500){
+  function animatePanZoomCinematic(cx, cy, finalOffsetX, finalOffsetY, finalScale){
+    // Stage 1: Zoom out to wide view
+    const pullbackScale = Math.max(0.3, scale * 0.4); // Zoom out to 40% of current (min 0.3)
+
+    const ws = workspace.getBoundingClientRect();
+    const sidebarBias = 100;
+
+    // Calculate current center in world coords
+    const currentCenterX = (-offsetX + ws.width / 2) / scale;
+    const currentCenterY = (-offsetY + ws.height / 2) / scale;
+
+    // Stage 1: Zoom out while keeping current center
+    const pullbackOffsetX = (ws.width / 2) - (pullbackScale * currentCenterX);
+    const pullbackOffsetY = (ws.height / 2) - (pullbackScale * currentCenterY);
+
+    // Stage 2: Calculate offset to center target (cx, cy) AT THE PULLBACK SCALE
+    const targetOffsetXAtPullback = (ws.width / 2 + sidebarBias) - (pullbackScale * cx);
+    const targetOffsetYAtPullback = (ws.height / 2) - (pullbackScale * cy);
+
+    // Stage 1: Zoom out (200ms) - keep current center
+    animatePanZoom(pullbackOffsetX, pullbackOffsetY, pullbackScale, 200, () => {
+      // Stage 2: Pan to target (300ms) - stay at pullback scale, pan to new center
+      animatePanZoom(targetOffsetXAtPullback, targetOffsetYAtPullback, pullbackScale, 300, () => {
+        // Stage 3: Zoom in (250ms) - target already centered, just change scale
+        // finalOffsetX/Y were calculated for finalScale, so they'll keep (cx,cy) centered
+        animatePanZoom(finalOffsetX, finalOffsetY, finalScale, 250);
+      });
+    });
+  }
+
+  function animatePanZoom(toX, toY, toScale, duration=500, onComplete=null){
     const fromX = offsetX, fromY = offsetY, fromS = scale;
     const start = performance.now();
     isAnimating = true;
@@ -1984,48 +2424,115 @@
       offsetY = fromY + (toY - fromY) * e;
       scale = fromS + (toScale - fromS) * e;
       applyTransform();
-      if(t < 1){ animHandle = requestAnimationFrame(step); } else { isAnimating = false; }
+      if(t < 1){
+        animHandle = requestAnimationFrame(step);
+      } else {
+        isAnimating = false;
+        if(onComplete) onComplete();
+      }
     }
     if(animHandle) cancelAnimationFrame(animHandle);
     animHandle = requestAnimationFrame(step);
   }
 
-  function revealAndDecorate(path, line, token){
-    const ed = editors.get(path);
-    if(!ed){ pendingFocus.set(path, {line, token}); return; }
-    if(line){
-      ed.revealLineInCenter(line);
-      const decos = [];
-      // Line highlight
-      decos.push({ range: new monaco.Range(line,1,line,1), options: { isWholeLine: true, className: 'match-line' } });
-      // Token highlight (best-effort)
-      if(token){
-        const model = ed.getModel();
-        const lineText = model.getLineContent(line);
-        const idx = lineText.toLowerCase().indexOf(String(token).toLowerCase());
-        if(idx >= 0){
-          const startCol = idx+1; const endCol = idx + String(token).length + 1;
-          decos.push({ range: new monaco.Range(line,startCol,line,endCol), options: { inlineClassName: 'match-token' } });
-        }
-      }
-      ed.deltaDecorations([], decos);
+  function scrollToLine(path, line){
+    const tile = tiles.get(path);
+    if(!tile || !line) return;
+
+    const body = tile.querySelector('.body');
+    const pre = body && body.querySelector('pre.prism-code');
+    if(!pre) return;
+
+    const code = pre.querySelector('code');
+    if(!code) return;
+
+    // Get chunk info
+    const chunkStart = parseInt(pre.getAttribute('data-chunk-start')) || 1;
+    const chunkEnd = parseInt(pre.getAttribute('data-chunk-end')) || 999999;
+    const totalLines = parseInt(pre.getAttribute('data-total-lines')) || 0;
+
+    // Check if target line is in the current chunk
+    if(line < chunkStart || line > chunkEnd){
+      // Line is not in current chunk - need to reload with focus on that line
+      pendingFocus.set(path, { line });
+      loadTileContent(path, null, line).catch(e => {/* ignore */});
+      return;
     }
+
+    // Wait a tick for Prism to finish rendering, then scroll
+    requestAnimationFrame(() => {
+      // Line is in chunk - calculate position relative to chunk
+      const relativeLineIndex = line - chunkStart; // 0-based index within chunk
+
+      // Get actual computed line height (after Prism rendering)
+      const computedStyle = window.getComputedStyle(pre);
+      const fontSize = parseFloat(computedStyle.fontSize);
+      const lineHeight = parseFloat(computedStyle.lineHeight) || fontSize * 1.4;
+
+      // Calculate scroll position (relative to chunk)
+      const scrollTop = relativeLineIndex * lineHeight;
+
+      // Smooth scroll to position (target line at top third of viewport)
+      const targetScroll = Math.max(0, scrollTop - (pre.clientHeight / 3));
+      pre.scrollTo({
+        top: targetScroll,
+        behavior: 'smooth'
+      });
+
+      // Remove previous highlights
+      const existingHighlights = pre.querySelectorAll('.highlight-line, .highlight-line-fade');
+      existingHighlights.forEach(el => {
+        el.classList.remove('highlight-line');
+        el.classList.remove('highlight-line-fade');
+      });
+
+      // Add highlight to target line using Prism's line-numbers structure
+      const lineNumbersRows = pre.querySelectorAll('.line-numbers-rows > span');
+      if(lineNumbersRows && lineNumbersRows[relativeLineIndex]){
+        lineNumbersRows[relativeLineIndex].classList.add('highlight-line');
+
+        // Also add a temporary highlight effect
+        setTimeout(() => {
+          if(lineNumbersRows[relativeLineIndex]){
+            lineNumbersRows[relativeLineIndex].classList.remove('highlight-line');
+            lineNumbersRows[relativeLineIndex].classList.add('highlight-line-fade');
+            setTimeout(() => {
+              if(lineNumbersRows[relativeLineIndex]){
+                lineNumbersRows[relativeLineIndex].classList.remove('highlight-line-fade');
+              }
+            }, 2000);
+          }
+        }, 1000);
+      }
+    });
   }
 
   function focusResult(r){
-    const path = r.file_path; const line = (r.matches && r.matches[0] && r.matches[0].line) || null;
-    const token = (r.matches && r.matches[0] && r.matches[0].highlight) ? null : (qEl.value || null);
-    openTile(path).then(()=>{
+    const path = r.file_path;
+    const line = (r.matches && r.matches[0] && r.matches[0].line) || null;
+    const query = qEl.value.trim(); // Get current search query
+    openTile(path).then(async ()=>{
       centerOnTile(path);
-      loadEditor(path).then(()=>{ revealAndDecorate(path, line, token); });
+      if(!tileContent.has(path)){
+        await loadTileContent(path, null, line, query); // Pass line and query
+      } else if(line){
+        // Content exists, but may need to reload chunk centered on line with highlighting
+        await loadTileContent(path, null, line, query); // Reload with query for highlighting
+      }
       flashTile(path, 'focus');
     });
   }
 
   function focusLine(path, line, token){
-    openTile(path).then(()=>{
+    const query = token || qEl.value.trim(); // Use token or current search query
+    openTile(path).then(async ()=>{
       centerOnTile(path);
-      loadEditor(path).then(()=>{ revealAndDecorate(path, line, token); });
+      if(!tileContent.has(path)){
+        await loadTileContent(path, null, line, query); // Pass line and query
+      } else if(line){
+        // Content exists, but may need to reload chunk centered on line with highlighting
+        await loadTileContent(path, null, line, query); // Reload with query for highlighting
+      }
       flashTile(path, 'focus');
     });
   }
@@ -2116,25 +2623,214 @@
         const tree = buildTree(list.map(f=>f.file_path));
         layoutAndRender(tree);
       }
-      // Spawn tiles
-      for(const f of list){ await openTile(f.file_path); }
-      // Now load editors for all tiles with limited concurrency so content appears by default
-      const concurrency = 2;
+      // Spawn and load tiles with Prism (lightweight, can handle 1000s)
+      const concurrency = 10;
       let i = 0;
       async function next(){
         if(i >= list.length) return;
         const f = list[i++];
-        await loadEditor(f.file_path);
+        try{
+          await openTile(f.file_path);
+          await loadTileContent(f.file_path);
+        }catch(e){ /* ignore */ }
         await next();
       }
       const workers = [];
-      for(let k=0;k<concurrency;k++){ workers.push(next()); }
+      for(let k = 0; k < concurrency; k++) workers.push(next());
       await Promise.all(workers);
 
-      // Apply folder colors and update language bar now that all file languages are loaded
+      // Apply folder colors and update language bar
       applyAllFolderColors();
       updateLanguageBar();
     }catch(e){ /* ignore */ }
   }
+
+  // Beads integration
+  async function checkBeadsAvailable(){
+    try{
+      const res = await fetchJSON('/beads/check');
+      beadsAvailable = res.available || false;
+      if(!beadsAvailable){
+        beadsTicketsEl.innerHTML = '<div class="beads-empty">Beads not installed<br/><small>Install with: go install github.com/steveyegge/beads/cmd/bd@latest</small></div>';
+        // Hide the panel after showing message briefly
+        setTimeout(()=>{
+          if(!beadsAvailable && beadsPanelEl){
+            beadsPanelEl.classList.add('collapsed');
+          }
+        }, 3000);
+      } else {
+        await refreshBeadsTickets();
+      }
+    }catch(e){
+      beadsTicketsEl.innerHTML = '<div class="beads-empty">Error checking Beads</div>';
+    }
+  }
+
+  async function refreshBeadsTickets(){
+    if(!beadsAvailable) return;
+    try{
+      // Pass project_root as query parameter if available
+      const url = currentProjectRoot ? `/beads/list?project_root=${encodeURIComponent(currentProjectRoot)}` : '/beads/list';
+      console.log('[beads DEBUG] refreshBeadsTickets url=', url);
+      console.log('[beads DEBUG] currentProjectRoot=', currentProjectRoot);
+      const res = await fetchJSON(url);
+      console.log('[beads DEBUG] response=', res);
+      beadsTickets = res.tickets || [];
+      console.log('[beads DEBUG] ticket_count=', beadsTickets.length);
+      renderBeadsTickets();
+      updateBeadsTabCount();
+    }catch(e){
+      console.error('[beads DEBUG] error=', e);
+      beadsTicketsEl.innerHTML = '<div class="beads-empty">Error loading tickets</div>';
+    }
+  }
+
+  function updateBeadsTabCount(){
+    const openCount = beadsTickets.filter(t => t.status === 'open').length;
+    if(beadsPanelTabBtn){
+      beadsPanelTabBtn.textContent = String(openCount);
+    }
+  }
+
+  function renderBeadsTickets(){
+    const filtered = beadsTickets.filter(ticket => {
+      if(beadsCurrentFilter === 'all') return true;
+      if(beadsCurrentFilter === 'ready'){
+        // TODO: Check if ticket is ready (no blockers)
+        return ticket.status === 'open';
+      }
+      return ticket.status === beadsCurrentFilter;
+    });
+
+    if(filtered.length === 0){
+      beadsTicketsEl.innerHTML = `<div class="beads-empty">No ${beadsCurrentFilter} tickets</div>`;
+      return;
+    }
+
+    beadsTicketsEl.innerHTML = '';
+    filtered.forEach(ticket => {
+      const div = document.createElement('div');
+      div.className = 'beads-ticket';
+      div.dataset.id = ticket.id;
+
+      const header = document.createElement('div');
+      header.className = 'beads-ticket-header';
+
+      const id = document.createElement('div');
+      id.className = 'beads-ticket-id';
+      id.textContent = ticket.id;
+
+      const badges = document.createElement('div');
+      badges.className = 'beads-ticket-badges';
+
+      const statusBadge = document.createElement('span');
+      statusBadge.className = `beads-ticket-badge status-${ticket.status}`;
+      statusBadge.textContent = ticket.status.replace('_', ' ');
+
+      const priorityBadge = document.createElement('span');
+      priorityBadge.className = `beads-ticket-badge priority-${ticket.priority}`;
+      priorityBadge.textContent = `P${ticket.priority}`;
+
+      badges.appendChild(statusBadge);
+      badges.appendChild(priorityBadge);
+
+      header.appendChild(id);
+      header.appendChild(badges);
+
+      const title = document.createElement('div');
+      title.className = 'beads-ticket-title';
+      title.textContent = ticket.title;
+
+      const meta = document.createElement('div');
+      meta.className = 'beads-ticket-meta';
+
+      const type = document.createElement('span');
+      type.className = 'beads-ticket-type';
+      type.textContent = ticket.issue_type;
+
+      const created = document.createElement('span');
+      created.textContent = `Created ${formatBeadsDate(ticket.created_at)}`;
+
+      meta.appendChild(type);
+      meta.appendChild(created);
+
+      div.appendChild(header);
+      div.appendChild(title);
+      div.appendChild(meta);
+
+      // Click to cycle status: open -> in_progress -> closed
+      div.onclick = async ()=>{
+        const nextStatus = ticket.status === 'open' ? 'in_progress' : ticket.status === 'in_progress' ? 'closed' : 'open';
+        try{
+          if(nextStatus === 'closed'){
+            await fetchJSON('/beads/close', {
+              method: 'POST',
+              headers: {'Content-Type': 'application/json'},
+              body: JSON.stringify({ id: ticket.id, project_root: currentProjectRoot })
+            });
+          } else {
+            await fetchJSON('/beads/update', {
+              method: 'POST',
+              headers: {'Content-Type': 'application/json'},
+              body: JSON.stringify({ id: ticket.id, status: nextStatus, project_root: currentProjectRoot })
+            });
+          }
+          showToast(`${ticket.id}: ${nextStatus.replace('_', ' ')}`);
+          await refreshBeadsTickets();
+        }catch(e){
+          showToast(`Failed to update ${ticket.id}`);
+        }
+      };
+
+      beadsTicketsEl.appendChild(div);
+    });
+  }
+
+  function formatBeadsDate(dateStr){
+    const d = new Date(dateStr);
+    const now = new Date();
+    const diff = now - d;
+    const days = Math.floor(diff / (1000 * 60 * 60 * 24));
+    if(days === 0) return 'today';
+    if(days === 1) return 'yesterday';
+    if(days < 7) return `${days}d ago`;
+    if(days < 30) return `${Math.floor(days/7)}w ago`;
+    return `${Math.floor(days/30)}mo ago`;
+  }
+
+  // Beads panel toggle
+  if(beadsPanelToggleBtn){
+    beadsPanelToggleBtn.onclick = ()=>{
+      beadsPanelEl.classList.toggle('collapsed');
+    };
+  }
+  if(beadsPanelTabBtn){
+    beadsPanelTabBtn.onclick = ()=>{
+      beadsPanelEl.classList.remove('collapsed');
+    };
+  }
+
+  // Beads filter buttons
+  beadsFilterBtns.forEach(btn => {
+    btn.onclick = ()=>{
+      beadsFilterBtns.forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      beadsCurrentFilter = btn.dataset.filter;
+      renderBeadsTickets();
+    };
+  });
+
+  // Note: checkBeadsAvailable() is now called from refreshStatus() after project root is set
+
+  // Poll for Beads updates every 10 seconds when panel is open
+  function startBeadsPolling(){
+    if(beadsPollInterval) clearInterval(beadsPollInterval);
+    beadsPollInterval = setInterval(()=>{
+      if(!beadsPanelEl.classList.contains('collapsed') && beadsAvailable){
+        refreshBeadsTickets();
+      }
+    }, 10000);
+  }
+  startBeadsPolling();
 
 })();
