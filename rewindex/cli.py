@@ -139,7 +139,14 @@ def cmd_search(args: argparse.Namespace) -> int:
             is_current=None if (args.include_deleted or use_versions) else True,
             created_before_ms=as_of_ms,
         )
-        options = SearchOptions(limit=args.limit, context_lines=args.context, highlight=args.highlight)
+        options = SearchOptions(
+            limit=args.limit,
+            context_lines=args.context,
+            highlight=args.highlight,
+            fuzziness='AUTO' if args.fuzzy else None,
+            partial=args.partial,
+            show_deleted=args.include_deleted,
+        )
         res = simple_search_es(es, index_name, args.query, filters, options, debug=getattr(args, 'debug', False))
         # Helpful fallback: if no results and a language filter is set (files index only), retry without it
         if not use_versions and res.get("total_hits", 0) == 0 and args.lang:
@@ -398,6 +405,8 @@ def build_parser() -> argparse.ArgumentParser:
     sp_search.add_argument("--ext", help="Filter by extension, e.g. .py")
     sp_search.add_argument("--limit", type=int, default=10, help="Maximum results (default: 10)")
     sp_search.add_argument("--context", type=int, default=2, help="Context lines around match (default: 2)")
+    sp_search.add_argument("--fuzzy", action="store_true", help="Enable fuzzy matching for typo tolerance")
+    sp_search.add_argument("--partial", action="store_true", help="Enable partial/prefix matching (adds wildcards)")
     sp_search.add_argument("--json", action="store_true")
     sp_search.add_argument("--oneline", action="store_true")
     sp_search.add_argument("--files-only", action="store_true")

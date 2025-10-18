@@ -4,13 +4,21 @@
   const resultsEl = document.getElementById('results');
   const statusEl = document.getElementById('status');
   const qEl = document.getElementById('q');
+  const searchContainer = qEl.parentElement;
+  const clearSearchBtn = document.getElementById('clearSearch');
+  const deletedToggleBtn = document.getElementById('deletedToggle');
+  const partialToggleBtn = document.getElementById('partialToggle');
+  const fuzzyToggleBtn = document.getElementById('fuzzyToggle');
+  const treemapModeBtn = document.getElementById('treemapMode');
+  const treemapFoldersBtn = document.getElementById('treemapFolders');
+  const sizeByBytesBtn = document.getElementById('sizeByBytes');
   const followCliBtn = document.getElementById('followCli');
   const followUpdatesBtn = document.getElementById('followUpdates');
+  const dynTextBtn = document.getElementById('dynText');
   const startWatch = document.getElementById('startWatch');
   const stopWatch = document.getElementById('stopWatch');
   const languageBarEl = document.getElementById('languageBar');
   const languageLegendEl = document.getElementById('languageLegend');
-  const searchSectionEl = document.getElementById('searchSection');
   const timeline = document.getElementById('timeline');
   const spark = document.getElementById('sparkline');
   const scrubber = document.getElementById('scrubber');
@@ -18,6 +26,11 @@
   const sparkTick = document.getElementById('sparkTick');
   const sparkHover = document.getElementById('sparkHover');
   const goLiveBtn = document.getElementById('goLive');
+  const overlayEditorEl = document.getElementById('overlayEditor');
+  const overlayFilePathEl = document.getElementById('overlayFilePath');
+  const overlayEditorContainer = document.getElementById('overlayEditorContainer');
+  const saveOverlayBtn = document.getElementById('saveOverlay');
+  const cancelOverlayBtn = document.getElementById('cancelOverlay');
 
   let timelineMin = null, timelineMax = null;
   let currentAsOfMs = null;
@@ -25,8 +38,19 @@
   let sparkKeys = [];
   let followCliMode = false;
   let followUpdatesMode = false;
+  let treemapMode = false;
+  let treemapFoldersMode = false;
+  let sizeByBytes = false;
+  let fuzzyMode = false;
+  let partialMode = false;
+  let deletedMode = false;
+  let dynTextMode = false;
   let languageColors = {}; // Map of language -> color
   let languageList = []; // Ordered list of discovered languages
+  let recentUpdates = []; // Track recent file updates [{path, action, timestamp}]
+  const MAX_RECENT_UPDATES = 20;
+  let overlayEditor = null; // Monaco editor instance for overlay
+  let overlayEditorPath = null; // Current file path being edited
 
   let scale = 1.0;
   let offsetX = 40;
@@ -69,9 +93,13 @@
     if(e.target.closest('#timeline') || e.target.closest('#asofFloat')) return;
     // Don't drag when clicking buttons or other interactive elements
     if(e.target.closest('button')) return;
+    // Don't drag when interacting with the search input
+    if(e.target === qEl) return;
     dragging = true;
     dragStart = [e.clientX - offsetX, e.clientY - offsetY];
     workspace.setPointerCapture(e.pointerId);
+    // Hide search container while dragging to prevent text selection
+    if(searchContainer) searchContainer.classList.add('dragging');
   });
   workspace.addEventListener('pointermove', (e)=>{
     if(!dragging) return;
@@ -79,7 +107,11 @@
     offsetY = e.clientY - dragStart[1];
     applyTransform();
   });
-  workspace.addEventListener('pointerup', ()=>{ dragging = false; });
+  workspace.addEventListener('pointerup', ()=>{
+    dragging = false;
+    // Show search container again
+    if(searchContainer) searchContainer.classList.remove('dragging');
+  });
 
   async function fetchJSON(url, opts){
     const r = await fetch(url, opts);
@@ -112,6 +144,12 @@
       row('Files', files);
       row('Versions', versions);
 
+      // Update search placeholder with project directory
+      if(s.project_root && qEl){
+        const projectName = s.project_root.split('/').pop() || s.project_root;
+        qEl.placeholder = `search ${projectName}`;
+      }
+
       // Conditionally show/hide watcher buttons based on state
       const watcherRunning = s.watcher === 'running';
       if(startWatch) startWatch.classList.toggle('hidden', watcherRunning);
@@ -127,24 +165,44 @@
   async function doSearch(){
     if(followCliMode) return; // disabled in follow CLI mode
     if(!qEl.value.trim()) {
-      resultsEl.innerHTML = '';
       // Clear dimming on all tiles
       for(const [,tile] of tiles){ tile.classList.remove('dim'); }
       for(const [,el] of folders){ el.classList.remove('dim'); }
+      // Show recent updates when search is empty
+      renderRecentUpdates();
       return;
     }
     resultsEl.innerHTML = '';
+
     const body = {
       query: qEl.value,
       filters: currentAsOfMs ? { as_of_ms: currentAsOfMs } : {},
-      options: { limit: 50, context_lines: 2, highlight: true }
+      options: {
+        limit: 500,
+        context_lines: 2,
+        highlight: true,
+        fuzziness: fuzzyMode ? 'AUTO' : undefined,
+        partial: partialMode,
+        show_deleted: deletedMode
+      }
     };
     const res = await fetchJSON('/search/simple', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
-    renderResults(res.results||[]);
+    renderResults(res.results||[], res.total||0);
   }
 
-  function renderResults(results){
+  function renderResults(results, total){
     resultsEl.innerHTML = '';
+
+    // Add result count at the top
+    if(results.length > 0){
+      const countDiv = document.createElement('div');
+      countDiv.className = 'results-count';
+      const fileCount = results.length;
+      const matchCount = results.reduce((sum, r) => sum + (r.matches ? r.matches.length : 0), 0);
+      countDiv.textContent = `${matchCount} matches in ${fileCount} files`;
+      resultsEl.appendChild(countDiv);
+    }
+
     const matches = new Set(results.map(r => r.file_path));
     // Dim non-matching tiles and containers with no matches
     for(const [p, tile] of tiles){ tile.classList.toggle('dim', !matches.has(p)); }
@@ -156,26 +214,223 @@
     results.forEach((r, idx)=>{
       const grp = document.createElement('div');
       grp.className = 'result-group';
+
+      // File header with score badge
+      const fileHeader = document.createElement('div');
+      fileHeader.className = 'result-file-header';
+
       const file = document.createElement('div');
       file.className = 'result-file';
+      if(r.deleted) file.classList.add('deleted');
       file.textContent = r.file_path;
       file.onclick = ()=> { focusResult(r); file.scrollIntoView({block:'nearest'}); };
+
+      // Add deleted badge
+      if(r.deleted){
+        const deletedBadge = document.createElement('span');
+        deletedBadge.className = 'deleted-badge';
+        deletedBadge.textContent = 'DELETED';
+        fileHeader.appendChild(file);
+        fileHeader.appendChild(deletedBadge);
+      }
+
+      // Add score badge
+      if(r.score_pct !== undefined){
+        const scoreBadge = document.createElement('span');
+        scoreBadge.className = 'score-badge';
+        scoreBadge.textContent = `${r.score_pct}%`;
+        scoreBadge.setAttribute('data-score', r.score_pct);
+        fileHeader.appendChild(file);
+        fileHeader.appendChild(scoreBadge);
+      } else {
+        fileHeader.appendChild(file);
+      }
+
       const ol = document.createElement('div');
       ol.className = 'result-matches';
       (r.matches||[]).forEach((m)=>{
         const item = document.createElement('div');
         item.className = 'result-match';
         const ln = m.line ? `:${m.line}` : '';
-        const snippet = (m.highlight||'').replace(/<[^>]*>/g,'');
-        item.textContent = `${ln}  ${snippet.slice(0,120)}`;
+        const snippet = m.highlight || '';
+        // Use innerHTML to render <mark> tags for highlighting
+        item.innerHTML = `${ln}  ${snippet.slice(0,120)}`;
         item.onclick = ()=> { focusLine(r.file_path, m.line, qEl.value); item.scrollIntoView({block:'nearest'}); };
         ol.appendChild(item);
       });
-      grp.appendChild(file);
+      grp.appendChild(fileHeader);
       grp.appendChild(ol);
       resultsEl.appendChild(grp);
       if(idx === 0) { focusResult(r); grp.scrollIntoView({block:'nearest'}); }
     });
+  }
+
+  function renderRecentUpdates(){
+    resultsEl.innerHTML = '';
+
+    if(recentUpdates.length === 0){
+      const emptyDiv = document.createElement('div');
+      emptyDiv.className = 'results-count';
+      emptyDiv.textContent = 'No recent updates';
+      emptyDiv.style.opacity = '0.6';
+      resultsEl.appendChild(emptyDiv);
+      return;
+    }
+
+    // Header
+    const headerDiv = document.createElement('div');
+    headerDiv.className = 'results-count';
+    headerDiv.textContent = `${recentUpdates.length} recent updates`;
+    resultsEl.appendChild(headerDiv);
+
+    // Render each update
+    recentUpdates.forEach((update, idx)=>{
+      const grp = document.createElement('div');
+      grp.className = 'result-group recent-update-item';
+
+      const fileHeader = document.createElement('div');
+      fileHeader.className = 'result-file-header';
+
+      const file = document.createElement('div');
+      file.className = 'result-file';
+      file.textContent = update.path;
+      file.onclick = ()=> {
+        const tile = tiles.get(update.path);
+        if(tile){
+          openTile(update.path).then(()=>{
+            centerOnTile(update.path);
+            loadEditor(update.path);
+            flashTile(update.path, 'focus');
+          });
+        }
+        file.scrollIntoView({block:'nearest'});
+      };
+
+      // Action and timestamp badge
+      const badge = document.createElement('span');
+      badge.className = 'update-badge';
+      badge.textContent = update.action;
+      badge.setAttribute('data-action', update.action);
+
+      fileHeader.appendChild(file);
+      fileHeader.appendChild(badge);
+
+      // Timestamp
+      const timestampDiv = document.createElement('div');
+      timestampDiv.className = 'update-timestamp';
+      const timeAgo = getTimeAgo(update.timestamp);
+      timestampDiv.textContent = timeAgo;
+
+      grp.appendChild(fileHeader);
+      grp.appendChild(timestampDiv);
+      resultsEl.appendChild(grp);
+    });
+  }
+
+  function getTimeAgo(timestamp){
+    const now = Date.now();
+    const diff = now - timestamp;
+    const seconds = Math.floor(diff / 1000);
+    const minutes = Math.floor(seconds / 60);
+    const hours = Math.floor(minutes / 60);
+    const days = Math.floor(hours / 24);
+
+    if(days > 0) return `${days}d ago`;
+    if(hours > 0) return `${hours}h ago`;
+    if(minutes > 0) return `${minutes}m ago`;
+    return 'just now';
+  }
+
+  async function openOverlayEditor(path){
+    overlayEditorPath = path;
+    overlayFilePathEl.textContent = path;
+
+    // Fetch file content
+    try{
+      const data = await fetchJSON('/file?path=' + encodeURIComponent(path));
+
+      // Clear container
+      overlayEditorContainer.innerHTML = '';
+
+      // Create Monaco editor in overlay
+      if(typeof require === 'undefined'){
+        showToast('Monaco editor not available');
+        return;
+      }
+
+      require.config({ paths: { 'vs': 'https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min/vs' } });
+      require(['vs/editor/editor.main'], function(){
+        if(overlayEditor){
+          try{ overlayEditor.dispose(); }catch(e){}
+        }
+
+        // Calculate line count and dynamic font size
+        const content = data.content || '';
+        const lineCount = content.split('\n').length;
+        const fontSize = calculateDynamicFontSize(lineCount);
+
+        overlayEditor = monaco.editor.create(overlayEditorContainer, {
+          value: content,
+          language: normalizeLanguageForMonaco(data.language),
+          readOnly: false,  // Editable!
+          minimap: { enabled: true },
+          theme: 'ayu-dark',
+          fontSize: fontSize,
+          automaticLayout: true,
+        });
+      });
+
+      // Show overlay
+      overlayEditorEl.style.display = 'flex';
+    }catch(e){
+      showToast('Failed to load file for editing');
+      console.error('Overlay editor error:', e);
+    }
+  }
+
+  function closeOverlayEditor(){
+    if(overlayEditor){
+      try{ overlayEditor.dispose(); }catch(e){}
+      overlayEditor = null;
+    }
+    overlayEditorPath = null;
+    overlayEditorEl.style.display = 'none';
+  }
+
+  async function saveOverlayEditor(){
+    if(!overlayEditor || !overlayEditorPath){
+      showToast('No file to save');
+      return;
+    }
+
+    const model = overlayEditor.getModel();
+    if(!model){
+      showToast('No content to save');
+      return;
+    }
+
+    const content = model.getValue();
+
+    try{
+      // Save file via backend API
+      const res = await fetchJSON('/file/save', {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({
+          path: overlayEditorPath,
+          content: content
+        })
+      });
+
+      showToast(`Saved: ${overlayEditorPath}`);
+      closeOverlayEditor();
+
+      // Refresh tile content
+      await refreshTileContent(overlayEditorPath);
+    }catch(e){
+      showToast(`Failed to save: ${e.message || e}`);
+      console.error('Save failed:', e);
+    }
   }
 
   const tiles = new Map(); // path -> tile DOM
@@ -185,6 +440,7 @@
   const filePos = new Map(); // path -> {x,y}
   const fileFolder = new Map(); // path -> folderPath
   const fileLanguages = new Map(); // path -> language
+  const fileMeta = new Map(); // path -> {size_bytes, line_count}
   const toasts = document.getElementById('toasts');
   let nextX = 0;
   let nextY = 0;
@@ -196,12 +452,15 @@
     if(tiles.has(path)) return tiles.get(path);
     const tile = document.createElement('div');
     tile.className = 'tile';
-    const pos = filePos.get(path) || {x:0, y:0};
+    const pos = filePos.get(path) || {x:0, y:0, w:600, h:400};
     tile.style.left = `${pos.x}px`;
     tile.style.top = `${pos.y}px`;
+    // Apply dimensions if specified (treemap mode)
+    if(pos.w) tile.style.width = `${pos.w}px`;
+    if(pos.h) tile.style.height = `${pos.h}px`;
     const title = document.createElement('div');
     title.className = 'title';
-    title.innerHTML = `<span>${path}</span><span class="right"><button class="btn tiny dlbtn" title="Download" style="display:none;">⬇</button><span class="lang"></span><span class="updated"></span></span>`;
+    title.innerHTML = `<span>${path}</span><span class="right"><button class="btn tiny editbtn" title="Edit" style="display:none;">✎</button><button class="btn tiny dlbtn" title="Download" style="display:none;">⬇</button><span class="lang"></span><span class="updated"></span></span>`;
     const body = document.createElement('div');
     body.className = 'body';
     tile.appendChild(title); tile.appendChild(body);
@@ -327,6 +586,33 @@
     return monacoMap[lang] || lang || 'plaintext';
   }
 
+  function calculateDynamicFontSize(lineCount){
+    // Returns font size based on file line count
+    // Small files: 14px, Large files: 8px
+    if(!dynTextMode) return 12; // Default font size when disabled
+    if(!lineCount || lineCount <= 0) return 12;
+
+    // Logarithmic scaling: bigger files get smaller font
+    // 1-100 lines: 14px
+    // 100-500 lines: 12px
+    // 500-1000 lines: 10px
+    // 1000-2000 lines: 9px
+    // 2000+ lines: 8px
+    const MIN_FONT = 8;
+    const MAX_FONT = 14;
+
+    if(lineCount <= 100) return MAX_FONT;
+    if(lineCount >= 2000) return MIN_FONT;
+
+    // Logarithmic interpolation
+    const logMin = Math.log(100);
+    const logMax = Math.log(2000);
+    const logValue = Math.log(lineCount);
+    const ratio = (logValue - logMin) / (logMax - logMin);
+
+    return Math.round(MAX_FONT - (ratio * (MAX_FONT - MIN_FONT)));
+  }
+
   async function loadEditor(path, initData){
     if(editors.has(path)) return editors.get(path);
     let tile = tiles.get(path);
@@ -351,7 +637,7 @@
       pre.className = 'pre';
       pre.textContent = data.content || '';
       body.appendChild(pre);
-      setupDownloadButton(path);
+      setupTileButtons(path);
       return null;
     }
     try{
@@ -366,7 +652,7 @@
           pre.className = 'pre';
           pre.textContent = data.content || '';
           body.appendChild(pre);
-          setupDownloadButton(path);
+          setupTileButtons(path);
           finish(null);
         }, 3000);
         require(['vs/editor/editor.main'], function(){
@@ -401,19 +687,24 @@
               window.__rewindexMonacoThemeSet = true;
             }
           }catch(e){}
+          // Calculate line count and dynamic font size
+          const content = data.content || '';
+          const lineCount = content.split('\n').length;
+          const fontSize = calculateDynamicFontSize(lineCount);
+
           const editor = monaco.editor.create(body, {
-            value: data.content || '',
+            value: content,
             language: normalizeLanguageForMonaco(data.language),
             readOnly: true,
             minimap: { enabled: false },
             theme: 'ayu-dark',
-            fontSize: 12,
+            fontSize: fontSize,
             automaticLayout: true,
           });
           editors.set(path, editor);
           const pf = pendingFocus.get(path);
           if(pf){ revealAndDecorate(path, pf.line, pf.token); pendingFocus.delete(path); }
-          setupDownloadButton(path);
+          setupTileButtons(path);
           finish(editor);
         }, function(){
           // Errback: fallback
@@ -423,7 +714,7 @@
           pre.className = 'pre';
           pre.textContent = data.content || '';
           body.appendChild(pre);
-          setupDownloadButton(path);
+          setupTileButtons(path);
           finish(null);
         });
       });
@@ -432,24 +723,38 @@
       pre.className = 'pre';
       pre.textContent = data.content || '';
       body.appendChild(pre);
-      setupDownloadButton(path);
+      setupTileButtons(path);
       return null;
     }
   }
 
-  function setupDownloadButton(path){
+  function setupTileButtons(path){
     const tile = tiles.get(path);
     if(!tile) return;
-    const btn = tile.querySelector('.dlbtn');
-    if(!btn) return;
 
-    // Show button only when viewing historical version
-    btn.style.display = (currentAsOfMs != null) ? 'inline-block' : 'none';
+    // Setup download button (historical mode only)
+    const dlBtn = tile.querySelector('.dlbtn');
+    if(dlBtn){
+      dlBtn.style.display = (currentAsOfMs != null) ? 'inline-block' : 'none';
+    }
+
+    // Setup edit button (live mode only)
+    const editBtn = tile.querySelector('.editbtn');
+    if(editBtn){
+      editBtn.style.display = (currentAsOfMs == null) ? 'inline-block' : 'none';
+      editBtn.onclick = (ev)=>{
+        ev.preventDefault();
+        ev.stopPropagation();
+        openOverlayEditor(path);
+      };
+    }
+
+    if(!dlBtn) return;
 
     // Remove any existing click handler to avoid duplicates
-    btn.onclick = null;
+    dlBtn.onclick = null;
 
-    btn.onclick = (ev)=>{
+    dlBtn.onclick = (ev)=>{
       ev.preventDefault();
       ev.stopPropagation();
 
@@ -543,7 +848,7 @@
       // Store language and apply color
       fileLanguages.set(path, data.language);
       applyLanguageColor(tile, data.language);
-      setupDownloadButton(path);
+      setupTileButtons(path);
     }catch(e){ /* ignore */ }
   }
 
@@ -653,6 +958,181 @@
     }
   }
 
+  function layoutTreemap(paths){
+    // Shelf-packing treemap based on line_count or size_bytes
+    // Clear old containers/positions
+    for(const [, el] of folders){ el.remove(); }
+    folders.clear(); filePos.clear(); fileFolder.clear();
+
+    // Gather files with sizes
+    const items = [];
+    for(const p of paths){
+      const meta = fileMeta.get(p) || {line_count: 1, size_bytes: 1};
+      const size = sizeByBytes ? Math.max(1, meta.size_bytes || 1) : Math.max(1, meta.line_count || 1);
+      items.push({
+        path: p,
+        size: size
+      });
+    }
+
+    if(items.length === 0) return;
+
+    // Sort by size descending (largest first for better packing)
+    items.sort((a, b) => b.size - a.size);
+
+    // Calculate total area and determine base tile size
+    const totalSize = items.reduce((sum, item) => sum + item.size, 0);
+    const minTileW = 300, minTileH = 200;
+    const maxTileW = 800, maxTileH = 600;
+    const gap = 20;
+    const maxRowWidth = 3200; // Canvas wrap width
+
+    // Assign sizes based on relative size (using sqrt for more balanced sizing)
+    const sizedItems = items.map(item => {
+      const ratio = Math.sqrt(item.size / totalSize);
+      const scale = Math.max(0.5, Math.min(2.0, ratio * 10)); // Scale factor between 0.5-2.0
+      const w = Math.max(minTileW, Math.min(maxTileW, minTileW * scale));
+      const h = Math.max(minTileH, Math.min(maxTileH, minTileH * scale));
+      return { ...item, w, h };
+    });
+
+    // Shelf packing algorithm
+    let x = 0, y = 0, rowH = 0;
+    for(const item of sizedItems){
+      // Check if we need to wrap to next row
+      if(x > 0 && x + item.w > maxRowWidth){
+        x = 0;
+        y += rowH + gap;
+        rowH = 0;
+      }
+
+      // Place tile with size information
+      filePos.set(item.path, { x, y, w: item.w, h: item.h });
+      fileFolder.set(item.path, ''); // No folders in treemap mode
+
+      x += item.w + gap;
+      rowH = Math.max(rowH, item.h);
+    }
+  }
+
+  function layoutTreemapWithFolders(root){
+    // Treemap with folder structure - variable file sizes based on metric
+    for(const [, el] of folders){ el.remove(); }
+    folders.clear(); filePos.clear(); fileFolder.clear();
+
+    const gap = 40, pad = 30, header = 0;
+    const maxRow = 2400; // wrap width
+
+    function layoutNode(node, ox, oy, render=true){
+      // Compute child boxes with variable sizes for files
+      const children = [];
+
+      // Add folders first
+      for(const [name, sub] of node.folders){
+        const size = layoutNode(sub, 0, 0, false); // measure only
+        children.push({ type:'folder', node: sub, w: size.w, h: size.h });
+      }
+
+      // Add files with treemap sizing
+      for(const fp of node.files){
+        const meta = fileMeta.get(fp) || {line_count: 1, size_bytes: 1};
+        const size = sizeByBytes ? Math.max(1, meta.size_bytes || 1) : Math.max(1, meta.line_count || 1);
+        const totalSize = node.files.reduce((sum, p) => {
+          const m = fileMeta.get(p) || {line_count: 1, size_bytes: 1};
+          return sum + (sizeByBytes ? (m.size_bytes || 1) : (m.line_count || 1));
+        }, 0);
+
+        const ratio = Math.sqrt(size / totalSize);
+        const scale = Math.max(0.5, Math.min(2.0, ratio * 8));
+        const w = Math.max(300, Math.min(800, 400 * scale));
+        const h = Math.max(200, Math.min(600, 300 * scale));
+
+        children.push({ type:'file', path: fp, w, h });
+      }
+
+      if(node !== root && children.length === 0){
+        children.push({ type:'spacer', w: 400, h: 300 });
+      }
+
+      // Position children within this container
+      const labelPadX = 0;
+      let x = pad + labelPadX, y = pad + header, rowH = 0, innerW = 0;
+
+      for(const ch of children){
+        if(x > pad + labelPadX && x + ch.w > pad + labelPadX + maxRow){
+          x = pad + labelPadX; y += rowH + gap; rowH = 0;
+        }
+        ch.x = x; ch.y = y;
+        x += ch.w + gap;
+        rowH = Math.max(rowH, ch.h);
+        innerW = Math.max(innerW, ch.x + ch.w);
+      }
+
+      const innerH = (children.length ? (children[children.length-1].y + rowH) : (pad + header));
+      const W = Math.max(innerW + pad, 400 + 2*pad + labelPadX);
+      const H = Math.max(innerH + pad, header + 2*pad + 300);
+
+      // Render container (skip root)
+      if(render && node !== root){
+        const div = document.createElement('div');
+        div.className = 'folder';
+        div.style.left = `${ox}px`;
+        div.style.top = `${oy}px`;
+        div.style.width = `${W}px`;
+        div.style.height = `${H}px`;
+        const label = document.createElement('div');
+        label.className = 'label';
+        label.textContent = node.path || node.name;
+        div.appendChild(label);
+        canvas.appendChild(div);
+        folders.set(node.path, div);
+      }
+
+      // Assign child positions
+      for(const ch of children){
+        if(ch.type === 'folder'){
+          layoutNode(ch.node, ox + ch.x, oy + ch.y, render);
+        }else if(ch.type === 'file'){
+          if(render){
+            filePos.set(ch.path, { x: ox + ch.x, y: oy + ch.y, w: ch.w, h: ch.h });
+            const parent = node.path || '';
+            fileFolder.set(ch.path, parent);
+          }
+        }
+      }
+      return { w: W, h: H };
+    }
+
+    // Layout root's children in rows across the canvas
+    let cx = 0, cy = 0, rowH = 0;
+    const topChildren = [];
+    for(const [name, sub] of root.folders){ topChildren.push({type:'folder', node: sub}); }
+    for(const f of root.files){
+      const meta = fileMeta.get(f) || {line_count: 1, size_bytes: 1};
+      const size = sizeByBytes ? Math.max(1, meta.size_bytes || 1) : Math.max(1, meta.line_count || 1);
+      const ratio = Math.sqrt(size / 1000); // Normalize to reasonable scale
+      const scale = Math.max(0.5, Math.min(2.0, ratio * 5));
+      const w = Math.max(300, Math.min(800, 400 * scale));
+      const h = Math.max(200, Math.min(600, 300 * scale));
+      topChildren.push({type:'file', path: f, w, h});
+    }
+
+    for(const ch of topChildren){
+      if(ch.type === 'folder'){
+        const size = layoutNode(ch.node, 0, 0, false); // measure
+        if(cx > 0 && cx + size.w > 3200){ cx = 0; cy += rowH + gap; rowH = 0; }
+        layoutNode(ch.node, cx, cy, true); // render
+        rowH = Math.max(rowH, size.h); cx += size.w + gap;
+      }else{
+        // Root-level file
+        if(cx > 0 && cx + ch.w + 2*pad > 3200){ cx = 0; cy += rowH + gap; rowH = 0; }
+        filePos.set(ch.path, { x: cx + pad, y: cy + pad + header, w: ch.w, h: ch.h });
+        fileFolder.set(ch.path, '');
+        cx += (ch.w + 2*pad) + gap; rowH = Math.max(rowH, ch.h + 2*pad + header);
+      }
+    }
+  }
+
   // Search on Enter key
   qEl.addEventListener('keydown', (e)=>{
     if(e.key === 'Enter'){
@@ -668,17 +1148,56 @@
     searchTimer = setTimeout(()=> doSearch(), 300);
   });
 
+  // Clear search button
+  if(clearSearchBtn){
+    clearSearchBtn.onclick = ()=>{
+      qEl.value = '';
+      doSearch(); // Will show recent updates since query is empty
+    };
+  }
+
+  // Deleted files toggle
+  if(deletedToggleBtn){
+    deletedToggleBtn.onclick = ()=>{
+      deletedMode = !deletedMode;
+      deletedToggleBtn.classList.toggle('active', deletedMode);
+      if(qEl.value.trim()){
+        doSearch(); // Re-run search with new deleted setting
+      }
+    };
+  }
+
+  // Partial match toggle
+  if(partialToggleBtn){
+    partialToggleBtn.onclick = ()=>{
+      partialMode = !partialMode;
+      partialToggleBtn.classList.toggle('active', partialMode);
+      if(qEl.value.trim()){
+        doSearch(); // Re-run search with new partial setting
+      }
+    };
+  }
+
+  // Fuzzy search toggle
+  if(fuzzyToggleBtn){
+    fuzzyToggleBtn.onclick = ()=>{
+      fuzzyMode = !fuzzyMode;
+      fuzzyToggleBtn.classList.toggle('active', fuzzyMode);
+      if(qEl.value.trim()){
+        doSearch(); // Re-run search with new fuzzy setting
+      }
+    };
+  }
+
   // Follow CLI toggle
   followCliBtn.onclick = ()=>{
     followCliMode = !followCliMode;
     followCliBtn.classList.toggle('active', followCliMode);
 
-    // Hide/show search section when Follow CLI is toggled
-    if(searchSectionEl){
-      searchSectionEl.classList.toggle('hidden', followCliMode);
-    }
-
+    // Hide/show search container when Follow CLI is toggled
+    if(searchContainer) searchContainer.classList.toggle('hidden', followCliMode);
     qEl.disabled = followCliMode;
+
     if(!followCliMode){
       resultsEl.innerHTML='';
       for(const [,tile] of tiles){ tile.classList.remove('dim'); }
@@ -696,6 +1215,114 @@
       showToast('Stopped following updates');
     }
   };
+
+  // Dynamic Text toggle
+  if(dynTextBtn){
+    dynTextBtn.onclick = ()=>{
+      dynTextMode = !dynTextMode;
+      dynTextBtn.classList.toggle('active', dynTextMode);
+
+      // Update all existing editors with new font sizes
+      for(const [path, editor] of editors){
+        if(!editor || !editor.getModel) continue;
+        try{
+          const model = editor.getModel();
+          if(!model) continue;
+          const lineCount = model.getLineCount();
+          const fontSize = calculateDynamicFontSize(lineCount);
+          editor.updateOptions({ fontSize: fontSize });
+        }catch(e){
+          // Ignore errors
+        }
+      }
+
+      // Update overlay editor if open
+      if(overlayEditor && overlayEditor.getModel){
+        try{
+          const model = overlayEditor.getModel();
+          if(model){
+            const lineCount = model.getLineCount();
+            const fontSize = calculateDynamicFontSize(lineCount);
+            overlayEditor.updateOptions({ fontSize: fontSize });
+          }
+        }catch(e){
+          // Ignore errors
+        }
+      }
+
+      showToast(dynTextMode ? 'Dynamic text sizing enabled' : 'Dynamic text sizing disabled');
+    };
+  }
+
+  // Overlay editor controls
+  if(saveOverlayBtn){
+    saveOverlayBtn.onclick = ()=> saveOverlayEditor();
+  }
+  if(cancelOverlayBtn){
+    cancelOverlayBtn.onclick = ()=> closeOverlayEditor();
+  }
+
+  // Double-click on tiles to open editor (live mode only)
+  canvas.addEventListener('dblclick', (e)=>{
+    if(currentAsOfMs != null) return; // Only in live mode
+    const tileEl = e.target.closest('.tile');
+    if(!tileEl) return;
+    // Find path for this tile
+    for(const [path, tile] of tiles){
+      if(tile === tileEl){
+        openOverlayEditor(path);
+        break;
+      }
+    }
+  });
+
+  // Treemap Mode toggle
+  if(treemapModeBtn){
+    treemapModeBtn.onclick = async ()=>{
+      treemapMode = !treemapMode;
+      treemapModeBtn.classList.toggle('active', treemapMode);
+
+      // Show/hide sub-toggles
+      if(treemapFoldersBtn) treemapFoldersBtn.style.display = treemapMode ? 'inline-block' : 'none';
+      if(sizeByBytesBtn) sizeByBytesBtn.style.display = treemapMode ? 'inline-block' : 'none';
+
+      if(treemapMode){
+        showToast('Treemap mode enabled');
+      } else {
+        showToast('Treemap mode disabled');
+        // Reset sub-toggles when disabled
+        treemapFoldersMode = false;
+        sizeByBytes = false;
+        if(treemapFoldersBtn) treemapFoldersBtn.classList.remove('active');
+        if(sizeByBytesBtn) sizeByBytesBtn.classList.remove('active');
+      }
+      // Re-layout with current file set
+      await refreshAllTiles(currentAsOfMs);
+    };
+  }
+
+  // Treemap Folders sub-toggle
+  if(treemapFoldersBtn){
+    treemapFoldersBtn.onclick = async ()=>{
+      treemapFoldersMode = !treemapFoldersMode;
+      treemapFoldersBtn.classList.toggle('active', treemapFoldersMode);
+      showToast(treemapFoldersMode ? 'Showing folders' : 'Flat treemap');
+      // Re-layout with current file set
+      await refreshAllTiles(currentAsOfMs);
+    };
+  }
+
+  // Size by Bytes sub-toggle
+  if(sizeByBytesBtn){
+    sizeByBytesBtn.onclick = async ()=>{
+      sizeByBytes = !sizeByBytes;
+      sizeByBytesBtn.classList.toggle('active', sizeByBytes);
+      showToast(sizeByBytes ? 'Sizing by bytes' : 'Sizing by lines');
+      // Re-layout with current file set
+      await refreshAllTiles(currentAsOfMs);
+    };
+  }
+
   startWatch.onclick = async ()=>{
     try{
       await fetchJSON('/index/start', {method:'POST'});
@@ -774,6 +1401,22 @@
         const path = data.file_path || data.path;
         const action = data.action || 'updated';
         if(path){
+          // Track recent update
+          recentUpdates.unshift({
+            path: path,
+            action: action,
+            timestamp: Date.now()
+          });
+          // Keep only last MAX_RECENT_UPDATES
+          if(recentUpdates.length > MAX_RECENT_UPDATES){
+            recentUpdates.pop();
+          }
+
+          // Re-render recent updates if search is empty
+          if(!qEl.value.trim() && !followCliMode){
+            renderRecentUpdates();
+          }
+
           showToast(`${action === 'added' ? 'Indexed' : 'Updated'}: ${path}`);
           refreshTileContent(path);
           flashTile(path, 'update');
@@ -987,10 +1630,29 @@
   }
 
   async function refreshAllTiles(ts){
-    // Determine target file set
+    // Determine target file set with metadata
     let list = [];
-    if(ts==null){ const res = await fetchJSON('/files'); list = (res.files||[]).map(f=>f.file_path); }
-    else { const res = await fetchJSON(`/files/at?ts=${ts}`); list = (res.files||[]).map(f=>f.file_path); }
+    let filesWithMeta = [];
+    if(ts==null){
+      const res = await fetchJSON('/files');
+      filesWithMeta = res.files || [];
+      list = filesWithMeta.map(f => f.file_path);
+    } else {
+      const res = await fetchJSON(`/files/at?ts=${ts}`);
+      filesWithMeta = res.files || [];
+      list = filesWithMeta.map(f => f.file_path);
+    }
+
+    // Store file metadata for treemap mode
+    fileMeta.clear();
+    for(const f of filesWithMeta){
+      if(f.file_path){
+        fileMeta.set(f.file_path, {
+          size_bytes: f.size_bytes || 0,
+          line_count: f.line_count || 1
+        });
+      }
+    }
 
     // Rebuild canvas & tiles for new file set
     // Remove existing tiles
@@ -1010,8 +1672,16 @@
     tiles.clear(); editors.clear(); filePos.clear(); fileFolder.clear(); fileLanguages.clear();
     for(const [, el] of folders){ el.remove(); } folders.clear();
 
-    const tree = buildTree(list);
-    layoutAndRender(tree);
+    // Use treemap (flat or with folders) or traditional layout based on mode
+    if(treemapMode && treemapFoldersMode){
+      const tree = buildTree(list);
+      layoutTreemapWithFolders(tree);
+    } else if(treemapMode){
+      layoutTreemap(list);
+    } else {
+      const tree = buildTree(list);
+      layoutAndRender(tree);
+    }
     // Spawn tiles
     for(const p of list){ await openTile(p); }
     // Load content concurrently (ensure Monaco for live and time-travel)
@@ -1044,7 +1714,7 @@
           else {
             const model = ed.getModel && ed.getModel();
             if(model) model.setValue(data.content||'');
-            setupDownloadButton(p);
+            setupTileButtons(p);
           }
           const tile = tiles.get(p);
           if(tile){
@@ -1233,9 +1903,28 @@
     try{
       const res = await fetchJSON('/files');
       const list = res.files || [];
-      // Build hierarchy and layout
-      const tree = buildTree(list.map(f=>f.file_path));
-      layoutAndRender(tree);
+
+      // Store file metadata for treemap mode
+      fileMeta.clear();
+      for(const f of list){
+        if(f.file_path){
+          fileMeta.set(f.file_path, {
+            size_bytes: f.size_bytes || 0,
+            line_count: f.line_count || 1
+          });
+        }
+      }
+
+      // Build hierarchy and layout (treemap flat, treemap with folders, or traditional)
+      if(treemapMode && treemapFoldersMode){
+        const tree = buildTree(list.map(f=>f.file_path));
+        layoutTreemapWithFolders(tree);
+      } else if(treemapMode){
+        layoutTreemap(list.map(f => f.file_path));
+      } else {
+        const tree = buildTree(list.map(f=>f.file_path));
+        layoutAndRender(tree);
+      }
       // Spawn tiles
       for(const f of list){ await openTile(f.file_path); }
       // Now load editors for all tiles with limited concurrency so content appears by default

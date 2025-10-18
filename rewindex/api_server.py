@@ -220,10 +220,13 @@ class RewindexHandler(BaseHTTPRequestHandler):
             try:
                 es = ESClient(cfg.elasticsearch.host)
                 idx = ensure_indices(es, cfg.resolved_index_prefix())
+                # Check for show_deleted parameter
+                show_deleted = qs.get("show_deleted", ["false"])[0].lower() == "true"
+                query = {"match_all": {}} if show_deleted else {"term": {"is_current": True}}
                 body = {
-                    "query": {"term": {"is_current": True}},
+                    "query": query,
                     "size": 10000,
-                    "_source": ["file_path", "language", "size_bytes"],
+                    "_source": ["file_path", "language", "size_bytes", "line_count", "deleted", "is_current"],
                 }
                 res = es.search(idx["files_index"], body)
                 files = [h.get("_source", {}) for h in res.get("hits", {}).get("hits", [])]
@@ -250,7 +253,7 @@ class RewindexHandler(BaseHTTPRequestHandler):
                     "query": {"range": {"created_at": {"lte": ts_val}}},
                     "sort": [{"file_path": {"order": "asc"}}, {"created_at": {"order": "desc"}}],
                     "size": 10000,
-                    "_source": ["file_path", "language"],
+                    "_source": ["file_path", "language", "size_bytes", "line_count"],
                 }
                 res = es.search(idx["versions_index"], body)
                 seen = {}
@@ -258,7 +261,12 @@ class RewindexHandler(BaseHTTPRequestHandler):
                     src = h.get("_source", {})
                     p = src.get("file_path")
                     if p and p not in seen:
-                        seen[p] = {"file_path": p, "language": src.get("language")}
+                        seen[p] = {
+                            "file_path": p,
+                            "language": src.get("language"),
+                            "size_bytes": src.get("size_bytes"),
+                            "line_count": src.get("line_count"),
+                        }
                 files = list(seen.values())
                 # Filter out deleted as of ts using current file docs' deleted_at when available
                 filtered = []
@@ -351,6 +359,9 @@ class RewindexHandler(BaseHTTPRequestHandler):
                         limit=options.get("limit", 20),
                         context_lines=options.get("context_lines", 3),
                         highlight=options.get("highlight", False),
+                        fuzziness=options.get("fuzziness"),
+                        partial=options.get("partial", False),
+                        show_deleted=options.get("show_deleted", False),
                     ),
                 )
                 _json_response(self, 200, res)
@@ -416,6 +427,42 @@ class RewindexHandler(BaseHTTPRequestHandler):
                 _json_response(self, 200, {"ok": True})
             except Exception as e:
                 _json_response(self, 400, {"error": str(e)})
+            return
+
+        if self.path == "/file/save":
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+                body = self.rfile.read(length) if length else b"{}"
+                payload = json.loads(body.decode("utf-8"))
+                path = payload.get("path")
+                content = payload.get("content")
+
+                if not path:
+                    _json_response(self, 400, {"error": "Missing path"})
+                    return
+                if content is None:
+                    _json_response(self, 400, {"error": "Missing content"})
+                    return
+
+                # Write file relative to project root
+                file_path = root / path
+
+                # Security check: ensure path is within project root
+                try:
+                    file_path.resolve().relative_to(root.resolve())
+                except ValueError:
+                    _json_response(self, 403, {"error": "Path must be within project root"})
+                    return
+
+                # Create parent directories if needed
+                file_path.parent.mkdir(parents=True, exist_ok=True)
+
+                # Write the file
+                file_path.write_text(content, encoding="utf-8")
+
+                _json_response(self, 200, {"ok": True, "path": path})
+            except Exception as e:
+                _json_response(self, 500, {"error": str(e)})
             return
 
         self.send_error(404, "Not found")

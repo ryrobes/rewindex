@@ -25,6 +25,9 @@ class SearchOptions:
     limit: int = 20
     context_lines: int = 3
     highlight: bool = True
+    fuzziness: Optional[str] = None
+    partial: bool = False  # Apply wildcard suffix for prefix matching
+    show_deleted: bool = False  # Show deleted files in results
 
 
 def simple_search_es(
@@ -38,18 +41,47 @@ def simple_search_es(
     filters = filters or SearchFilters()
     options = options or SearchOptions()
 
+    # Override is_current filter if show_deleted is enabled
+    if options.show_deleted and filters.is_current is not None:
+        filters.is_current = None  # Show all files (current + deleted)
+
     must: List[Dict[str, Any]] = []
     if query and query.strip() and query.strip() != "*":
-        must.append({
-            "multi_match": {
-                "query": query,
+        # Apply wildcard suffix for partial matching if requested
+        search_query = query
+        if options.partial and not ('*' in query or '?' in query):
+            # Add wildcards to each word for partial matching
+            search_query = ' '.join(word + '*' for word in query.split())
+
+        # Check if query contains wildcards
+        has_wildcards = '*' in search_query or '?' in search_query
+
+        if has_wildcards:
+            # Use query_string for wildcard support
+            must.append({
+                "query_string": {
+                    "query": search_query,
+                    "fields": [
+                        "content^1",
+                        "file_name.text^2"
+                    ],
+                    "default_operator": "AND"
+                }
+            })
+        else:
+            # Use multi_match for regular queries
+            match_query = {
+                "query": search_query,
                 "operator": "and",
                 "fields": [
                     "content^1",
                     "file_name.text^2"
                 ],
             }
-        })
+            # Add fuzziness if specified in options
+            if options.fuzziness:
+                match_query["fuzziness"] = options.fuzziness
+            must.append({"multi_match": match_query})
 
     filter_clauses: List[Dict[str, Any]] = []
     if filters.is_current is not None:
@@ -88,6 +120,9 @@ def simple_search_es(
                 "defined_classes",
                 "imports",
                 "content",
+                "deleted",
+                "deleted_at",
+                "is_current",
             ]
         },
     }
@@ -146,6 +181,8 @@ def simple_search_es(
             "score": h.get("_score", 0.0),
             "language": src.get("language"),
             "matches": matches,
+            "deleted": src.get("deleted", False),
+            "is_current": src.get("is_current", True),
             "metadata": {
                 "size_bytes": src.get("size_bytes"),
                 "functions": src.get("defined_functions", []),
@@ -153,6 +190,16 @@ def simple_search_es(
                 "imports": src.get("imports", []),
             },
         })
+
+    # Normalize scores to 0-100% based on max score in this result set
+    if results:
+        max_score = max(r["score"] for r in results)
+        if max_score > 0:
+            for r in results:
+                r["score_pct"] = round((r["score"] / max_score) * 100, 1)
+        else:
+            for r in results:
+                r["score_pct"] = 0.0
 
     out: Dict[str, Any] = {"total_hits": len(results), "results": results}
     if debug:

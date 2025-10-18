@@ -22,24 +22,13 @@
   <link
     href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@300..700&family=Zalando+Sans:ital,wght@0,200..900;1,200..900&display=swap"
     rel="stylesheet">
-
 </head>
 
 <body>
-
   <div id="sidebar">
 
-    <div class="section toggle-section">
-      <div class="toggle-row">
-        <button id="followCli" class="btn-toggle">Follow CLI</button>
-        <button id="followUpdates" class="btn-toggle">Follow Updates</button>
-      </div>
-    </div>
-    <div class="section search-section" id="searchSection">
-      <input id="q" class="input search-input" type="text" placeholder="Search codebase…" />
-    </div>
     <div class="section results-section">
-      <h3>Results</h3>
+      
       <div id="results"></div>
     </div>
     <div class="section language-bar-section">
@@ -50,7 +39,13 @@
     <div class="section status-section">
       <div class="status-header">
         <h3>Status</h3>
-        <div class="watcher-controls">
+        <div class="control-buttons">
+          <button id="treemapMode" class="btn-toggle-small">Treemap</button>
+          <button id="treemapFolders" class="btn-toggle-small sub-toggle" style="display:none;">Folders</button>
+          <button id="sizeByBytes" class="btn-toggle-small sub-toggle" style="display:none;">Bytes</button>
+          <button id="dynText" class="btn-toggle-small">Dyn Text</button>
+          <button id="followCli" class="btn-toggle-small">Follow CLI</button>
+          <button id="followUpdates" class="btn-toggle-small">Follow Updates</button>
           <button id="startWatch" class="btn btn-watcher">Start Watcher</button>
           <button id="stopWatch" class="btn btn-watcher">Stop Watcher</button>
         </div>
@@ -60,6 +55,13 @@
     <!-- <img src="/static/logo.png" alt="Rewindex Logo" id="logo" width="100px" /> -->
   </div>
   <div id="workspace">
+    <div class="search-container">
+      <button id="clearSearch" class="clear-search" title="Clear search">×</button>
+      <input id="q" class="floating-search" type="text" placeholder="Search codebase…" />
+      <button id="deletedToggle" class="deleted-toggle" title="Show deleted files">🗑</button>
+      <button id="partialToggle" class="partial-toggle" title="Toggle partial match">*</button>
+      <button id="fuzzyToggle" class="fuzzy-toggle" title="Toggle fuzzy search">~</button>
+    </div>
     <div id="canvas"></div>
     <div id="timeline">
       <div id="sparkline">
@@ -75,6 +77,16 @@
       <span id="asofLabel"></span>
       <button id="goLive" class="btn live" title="Go Live">Live</button>
     </div>
+  </div>
+  <div id="overlayEditor" class="overlay-editor" style="display:none;">
+    <div class="overlay-header">
+      <span id="overlayFilePath" class="overlay-file-path"></span>
+      <div class="overlay-controls">
+        <button id="saveOverlay" class="btn overlay-btn">Save</button>
+        <button id="cancelOverlay" class="btn overlay-btn cancel">Cancel</button>
+      </div>
+    </div>
+    <div id="overlayEditorContainer" class="overlay-editor-container"></div>
   </div>
   <div id="toasts" class="toasts"></div>
   <script src="/static/app.js"></script>
