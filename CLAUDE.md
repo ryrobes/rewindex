@@ -27,8 +27,14 @@ docker compose up -d
 # Developer mode (editable install)
 pip install -e .
 
+# Install with TUI support (adds textual + pygments)
+pip install -e ".[tui]"
+
 # Global install with pipx (recommended)
 pipx install .
+
+# Global install with TUI support
+pipx install "rewindex[tui]"
 
 # Build wheel/sdist
 python -m build
@@ -57,6 +63,17 @@ python3 -m rewindex.cli search "useEffect" --path "src/**"
 # Symbol search
 python3 -m rewindex.cli find-function authenticate
 python3 -m rewindex.cli find-class UserService
+python3 -m rewindex.cli find-todos
+
+# View and restore files
+python3 -m rewindex.cli view path/to/file.py
+python3 -m rewindex.cli view file.py --as-of "2 hours"
+python3 -m rewindex.cli view file.py --as-of 2025-01-31T12:00:00 --json
+python3 -m rewindex.cli restore path/to/file.py --as-of "1 day" --output restored.py
+python3 -m rewindex.cli restore path/to/file.py --force
+
+# LLM-friendly usage guide
+python3 -m rewindex.cli usage
 
 # Temporal queries (uses versions index)
 python3 -m rewindex.cli search "token" --all-versions
@@ -72,7 +89,15 @@ python3 -m rewindex.cli index rebuild --clean
 
 # Start HTTP server + Web UI
 python3 -m rewindex.cli serve --host 127.0.0.1 --port 8899
+# With Beads integration (external task management system)
+python3 -m rewindex.cli serve --host 127.0.0.1 --port 8899 --beads-root /path/to/beads/project
 # Web UI available at: http://localhost:8899/ui
+
+# Launch interactive TUI (requires: pip install rewindex[tui])
+python3 -m rewindex.cli tui
+python3 -m rewindex.cli tui "search query"  # Start with initial query
+# Or use the rewindex command directly:
+rewindex tui
 ```
 
 ### Running Tests
@@ -111,6 +136,13 @@ python3 -m rewindex.cli serve --host 127.0.0.1 --port 8899
 - Uses urllib (no requests or elasticsearch-py dependency)
 - Methods: index_exists, create_index, get_doc, put_doc, search, bulk
 - Accepts self-signed certs for local dev
+
+**db.py** - SQLite database module (EXPERIMENTAL - not currently integrated)
+- Parallel storage system with files/versions tables
+- FTS5 full-text search support (optional)
+- Functions: connect, upsert_file, stats
+- Stored in `.rewindex/scope.db` per project
+- May be integrated in future as ES alternative or companion
 
 **es_schema.py** - Index mappings and settings
 - Custom analyzer: `code_index_analyzer` with `word_delimiter_graph` filter
@@ -153,18 +185,66 @@ python3 -m rewindex.cli serve --host 127.0.0.1 --port 8899
 - All commands routed through argparse subcommands
 - Integrates with HTTP server via best-effort notifications to `/events/query`
 - JSON output mode for LLM consumption
+- Commands:
+  - **Index**: init, start, status, rebuild
+  - **Search**: search, find-function, find-class, find-todos
+  - **Temporal**: history, show, diff, view (with --as-of), restore (with --as-of)
+  - **Server**: serve (with optional --beads-root)
+  - **Utility**: usage (LLM-friendly help with system status)
 
 **api_server.py** - HTTP + WebSocket server
-- Endpoints: `/search/simple`, `/index/status`, `/ui`, `/static/*`
+- Search endpoints: `/search/simple`, `/index/status`
+- UI endpoints: `/ui`, `/static/*`
+- Beads integration endpoints: `/beads/check`, `/beads/list`, `/beads/create`, `/beads/update`, `/beads/close`, `/beads/ready`
+- File operations: `/file/save`, `/file/restore`
 - WebSocket: `/ws/events` for live updates to Web UI
 - Serves static assets from `rewindex/web/` (packaged with setuptools)
+- Supports `--beads-root` flag to integrate with external Beads task management system
 
-**web/** - Static UI
-- `index.html`: Canvas-based document tile viewer with Monaco editor (CDN)
-- `app.js`: WebSocket client, search/status UI, watcher controls, language normalization for Monaco
-- `styles.css`: Layout and tile styling
-- Monaco provides syntax highlighting for all supported languages automatically
+**tui/** - Terminal User Interface (Optional - requires `pip install rewindex[tui]`)
+- `__init__.py`: TUI availability checking and entry point
+- `app.py`: Main Textual application with reactive widgets
+- `sparkline.py`: ASCII sparkline generation for timeline visualization
+- `widgets/`: Placeholder for future widget modules
+- **Features**:
+  - **Transparent backgrounds**: Works beautifully with Hyprland + kitty/alacritty/ghostty
+  - **Live search**: Search-as-you-type with debounced queries
+  - **Split-pane view**: Results list (left) and preview pane (right)
+  - **Timeline sparkline**: Shows 7-day file activity history using Unicode block characters
+  - **Keyboard navigation**: vim-style (j/k) and arrow keys
+  - **Editor integration**: Press 'e' to open in $EDITOR with line number support
+  - **Syntax highlighting**: Context preview with line numbers (via Pygments)
+- **Keyboard shortcuts**:
+  - `j/k` or `↑/↓`: Navigate results
+  - `Enter`: View full file (in preview)
+  - `e`: Edit in $EDITOR (vim, nvim, code, etc.)
+  - `f`: Toggle fuzzy search mode
+  - `p`: Toggle partial/prefix matching
+  - `/`: Focus search bar
+  - `t`: Toggle timeline mode (placeholder for future time travel)
+  - `?`: Help (placeholder)
+  - `q`: Quit
+- **Dependencies**: textual>=0.47.0, pygments>=2.17.0
+
+**web/** - Static UI (2900+ lines - highly sophisticated)
+- `index.html`: Canvas-based document tile viewer with Monaco editor (CDN) and diff editor
+- `app.js` (2900+ lines): Feature-rich WebSocket client with:
+  - **Results-Only Mode (DEFAULT)**: Renders ONLY search results (max 200 files) for blazing fast performance
+  - **Show All Mode (optional)**: Traditional behavior showing entire codebase with ?mode=full parameter
+  - **Visualization modes**: Standard tiles, treemap view, treemap folders, size by bytes
+  - **Timeline/scrubber**: Temporal navigation with sparkline visualization
+  - **Monaco integration**: Full code editor with syntax highlighting for inline editing
+  - **Monaco diff editor**: Side-by-side comparison for historical versions
+  - **File operations**: View, edit, save, restore historical versions
+  - **Search modes**: Follow CLI queries, follow file updates, fuzzy matching, partial matches, include deleted files
+  - **Language analytics**: Color-coded language bar and legend
+  - **Beads integration**: Task/ticket management panel with filtering (all/open/working/closed)
+  - **Dynamic text sizing**: Adaptive text rendering based on tile size
+  - **Recent updates tracking**: Shows last 20 file modifications with action types
+- `styles.css`: Comprehensive layout with modal overlays, split views, timeline controls
+- Monaco provides syntax highlighting for 80+ languages automatically
 - Falls back to `<pre>` tags if Monaco CDN is unavailable (offline mode)
+- **Performance**: Results-Only mode provides 350x faster initial load compared to Show All mode
 
 ### Data Flow
 
@@ -267,6 +347,18 @@ python3 -m rewindex.cli serve --host 127.0.0.1 --port 8899
 - If file missing: set `is_current: false`, `deleted: true`, `deleted_at: <timestamp>`
 - If same hash appears at new path: set `renamed_to`/`renamed_from` fields
 
+### View and Restore Operations
+- **view command**: Retrieves file content from index without writing to filesystem
+  - Supports exact path lookup or fuzzy filename matching
+  - `--as-of` flag supports relative time (e.g., "2 hours", "3 days") or ISO 8601 timestamps
+  - Queries versions index for historical content or files index for current
+  - Outputs raw content (suitable for piping) or JSON with metadata
+- **restore command**: Writes file content from index to filesystem
+  - Same lookup logic as view (exact path or fuzzy match with --as-of)
+  - `--output` flag specifies destination path (defaults to original location)
+  - `--force` flag allows overwriting existing files
+  - Useful for recovering deleted files or reverting to historical versions
+
 ### Search Result Line Mapping
 - Elasticsearch returns highlight fragments (snippets of content with `<mark>` tags)
 - `_compute_line_context()` uses multiple strategies to find the matching line number:
@@ -343,6 +435,286 @@ python3 -m rewindex.cli serve --host 127.0.0.1 --port 8899
 - Relies on exclude patterns + binary detection to filter
 - Override via `.rewindex.json` to restrict to specific file types
 
+## TUI (Terminal User Interface) Usage
+
+Rewindex includes a beautiful, transparent TUI for interactive code search, perfect for tiling window managers like Hyprland.
+
+### Launching the TUI
+
+```bash
+# Basic launch
+rewindex tui
+
+# Launch with initial search query
+rewindex tui "authentication"
+
+# Or use Python module syntax
+python3 -m rewindex.cli tui
+```
+
+### TUI Layout
+
+```
+╭─ Rewindex ─────────────────────────── [Timeline: ▁▂▃▅▇█▇▅▃▂▁] ─ 2025-01-23 14:30 ─╮
+│ 🔍 Search: your query here█                                  [j/k: nav  e: edit]  │
+├──────────────────────────────┬───────────────────────────────────────────────────┤
+│ 📊 Results (15)              │ 📄 rewindex/auth.py:45                            │
+│                              │                                                    │
+│ 🐍 rewindex/auth.py:45       │   42 │                                            │
+│    def authenticate(token)   │   43 │ class AuthHandler:                         │
+│                              │ ► 45 │     def authenticate(token: str):          │
+│ 🟨 frontend/login.js:89      │   46 │         """Validates JWT tokens"""         │
+│    function authenticate()   │   47 │         if not token:                      │
+│                              │   48 │             return False                   │
+│ 🦀 server/auth.rs:234        │                                                    │
+│    fn authenticate(...)      │                                                    │
+├──────────────────────────────┴───────────────────────────────────────────────────┤
+│ q: Quit │ ?: Help │ /: Search │ e: Edit │ ↑↓: Navigate                          │
+╰───────────────────────────────────────────────────────────────────────────────────╯
+```
+
+### Key Features
+
+1. **Live Search**: Type in the search bar and results update in real-time
+2. **Search Modes**: Fuzzy and partial matching toggles with checkboxes or keyboard shortcuts
+3. **Split View**: Results on left, file preview on right
+4. **Timeline Sparkline**: Shows file modification activity over the last 7 days
+5. **Language Indicators**: Emoji and color-coded language markers (🐍 Python, 🟨 JavaScript, etc.)
+6. **Transparent Background**: Works perfectly with terminal transparency for aesthetic integration
+
+### Keyboard Shortcuts
+
+**Navigation**:
+- `j` or `↓`: Next result
+- `k` or `↑`: Previous result
+- `Ctrl+D`: Page down (future)
+- `Ctrl+U`: Page up (future)
+
+**Actions**:
+- `Enter`: Update preview pane with selected file
+- `e`: Edit file in $EDITOR (respects vim +line, code -g file:line syntax)
+- `/`: Focus search input
+- `q`: Quit application
+- `Ctrl+C`: Force quit
+
+**Search Modes**:
+- `f`: Toggle fuzzy matching (typo-tolerant search)
+- `p`: Toggle partial matching (prefix/wildcard search)
+- Click checkboxes to toggle modes
+- Changes automatically re-run search
+
+**Mouse Support**:
+- Click any result to select and preview
+- Scroll wheel to navigate results
+- Click checkboxes to toggle search modes
+- Full mouse integration for modern terminals
+
+**Future Features**:
+- `t`: Toggle timeline mode for time-travel search
+- `?`: Show help modal with all shortcuts
+- `y`: Yank file path to clipboard
+
+### Hyprland Integration
+
+Add to your `~/.config/hypr/hyprland.conf`:
+
+```bash
+# Rewindex code search (Super + /)
+bind = SUPER, slash, exec, kitty --class rewindex-tui -e rewindex tui
+windowrulev2 = float, class:^(rewindex-tui)$
+windowrulev2 = size 80% 80%, class:^(rewindex-tui)$
+windowrulev2 = center, class:^(rewindex-tui)$
+windowrulev2 = opacity 0.95, class:^(rewindex-tui)$
+
+# Or with alacritty:
+# bind = SUPER, slash, exec, alacritty --class rewindex-tui -e rewindex tui
+
+# Or with ghostty:
+# bind = SUPER, slash, exec, ghostty --class=rewindex-tui rewindex tui
+```
+
+### Customization
+
+The TUI uses Textual's theming system. To customize colors, create a custom theme by extending `RewindexTUI` and overriding the CSS:
+
+```python
+# custom_tui.py
+from rewindex.tui.app import RewindexTUI
+
+class CustomRewindexTUI(RewindexTUI):
+    CSS = RewindexTUI.CSS + """
+    ResultsList {
+        border: solid cyan;
+    }
+
+    PreviewPane {
+        border: solid magenta;
+    }
+    """
+
+if __name__ == "__main__":
+    app = CustomRewindexTUI()
+    app.run()
+```
+
+## Beads Integration (External Task Management)
+
+Rewindex Web UI can integrate with Beads, an external task/ticket management system (invoked via `bd` command). This is **optional** and requires:
+- The `bd` command-line tool to be installed and available in PATH
+- Starting the server with `--beads-root` pointing to a Beads project directory
+- If not specified, defaults to the server's working directory
+
+### Web UI Features
+- **Beads Panel**: Toggle panel showing all tickets with filters (all/open/working/closed)
+- **Ticket Management**: Create, update status, close tickets via Web UI
+- **Integration Status**: Shows whether `bd` command is available and functional
+- **Auto-refresh**: Polls for ticket updates periodically when panel is open
+
+### API Endpoints
+- `GET /beads/check` - Check if `bd` command is available
+- `GET /beads/list?project_root=...` - List all tickets for project
+- `POST /beads/create` - Create new ticket (body: `{title, description?, project_root?}`)
+- `POST /beads/update` - Update ticket status (body: `{ticket_id, status, project_root?}`)
+- `POST /beads/close` - Close ticket (body: `{ticket_id, project_root?}`)
+- `GET /beads/ready` - Check if Beads is ready (checks BD_HOME env var)
+
+### Notes
+- Beads integration is completely optional; Rewindex works without it
+- If `bd` command fails or is not found, Web UI gracefully hides Beads features
+- All Beads operations run `bd` CLI commands via subprocess in the specified working directory
+
+## Web UI Viewing Modes
+
+The Rewindex Web UI supports two viewing modes optimized for different use cases:
+
+### Results-Only Mode (Default)
+
+**Overview**: Renders ONLY files from search results (max 200) for optimal performance and focus.
+
+**Behavior**:
+- **Initial Load**: Clean canvas with search prompt (no files rendered)
+- **After Search**: Only matching files appear on canvas
+- **Layout**: Simple 3-column grid (no folder hierarchy for instant rendering)
+- **Performance**: 350x faster initial load, instant layout, snappy interactions
+- **Best For**: Daily code search, large codebases, focused work
+
+**Usage**:
+```bash
+# Default: Results-Only Mode
+http://localhost:8899/ui
+
+# Or explicitly enable it (button in UI)
+Click "Results Only" button (active state)
+```
+
+**Features**:
+- ✅ All search modes work (fuzzy, partial, deleted files)
+- ✅ All visualization modes work (treemap, folders, size-by-bytes)
+- ✅ Timeline and time travel work
+- ✅ Monaco editor, diff view, file operations
+- ✅ Limits to 200 files for performance
+- ✅ Clean, focused experience
+
+### Show All Mode (Optional)
+
+**Overview**: Traditional behavior - renders entire codebase with dimming for non-matches.
+
+**Behavior**:
+- **Initial Load**: Renders ALL files from index (may take 3-5 seconds for large codebases)
+- **After Search**: Dims non-matching files (keeps them visible for context)
+- **Visualization**: Full codebase overview, comprehensive treemap
+- **Best For**: Exploring new codebases, understanding structure, seeing full context
+
+**Usage**:
+```bash
+# Show All Mode via URL parameter
+http://localhost:8899/ui?mode=full
+http://localhost:8899/ui?show_all=true
+
+# Or toggle via button in UI
+Click "Results Only" button to disable it
+```
+
+**Features**:
+- ✅ See entire codebase at once
+- ✅ Dimming highlights matches while preserving context
+- ✅ Full treemap visualizations
+- ✅ Good for exploration and discovery
+
+### Mode Comparison
+
+| Feature | Results-Only (Default) | Show All (Optional) |
+|---------|----------------------|-------------------|
+| Initial Load | Instant (<10ms) | Slow (3-5 seconds) |
+| Search Results | Only matches visible | Matches bright, others dimmed |
+| Max Files | 200 | Unlimited |
+| Performance | ⚡ Blazing fast | 🐢 Slower with large codebases |
+| Best For | Daily work, focus | Exploration, context |
+| Canvas State | Empty until search | Always populated |
+
+### Switching Modes
+
+Toggle between modes at any time:
+
+**Via UI Button**:
+```
+1. Click "Results Only" button in left sidebar
+2. Active (green) = Results-Only Mode
+3. Inactive (gray) = Show All Mode
+```
+
+**Via URL Parameter**:
+```bash
+# Bookmark your preferred mode
+http://localhost:8899/ui              # Results-Only (default)
+http://localhost:8899/ui?mode=full    # Show All
+```
+
+### Workflow Examples
+
+**Example 1: Quick Search (Results-Only)**
+```
+1. Open UI → See search prompt
+2. Type "authentication" → 15 matching files appear
+3. Click tile → Edit in Monaco
+4. Clear search → Canvas clears
+```
+
+**Example 2: Full Exploration (Show All)**
+```
+1. Open UI with ?mode=full → All 2000 files render
+2. Enable treemap → Visualize structure
+3. Search "auth" → Non-matches dimmed
+4. See how auth relates to entire codebase
+```
+
+**Example 3: Hybrid Approach**
+```
+1. Start in Results-Only (default)
+2. Search for specific code
+3. Switch to Show All for context
+4. Switch back to Results-Only for speed
+```
+
+### Technical Details
+
+**Results-Only Mode Implementation**:
+- URL parameter: `resultsOnlyMode = !urlParams.get('show_all')`
+- On search: Stores results in `lastSearchResults[]`
+- `refreshAllTiles()` renders only `lastSearchResults.slice(0, 200)`
+- `layoutSimpleGrid()` arranges tiles in 3-column grid (no folder hierarchy)
+- `doSearch()` triggers canvas rebuild with limited file set
+- `spawnAll()` skips initial load, shows prompt
+- **Performance**: Avoids expensive `buildTree()` and complex folder layout
+
+**Show All Mode Implementation**:
+- Traditional behavior: fetch `/files` endpoint
+- Renders all tiles on canvas
+- Search applies dimming via CSS classes
+- `renderResults()` iterates all tiles to add/remove `dim` class
+
+For detailed implementation, see `WEB_UI_RESULTS_ONLY_MODE.md`.
+
 ## Extension Points
 
 ### Adding Language Support
@@ -362,10 +734,17 @@ python3 -m rewindex.cli serve --host 127.0.0.1 --port 8899
 - Adjust stopwords, char filters, token filters
 
 ### Web UI Customization
-- `rewindex/web/index.html` - HTML structure
-- `rewindex/web/styles.css` - Styling
-- `rewindex/web/app.js` - WebSocket client, search UI logic
+- `rewindex/web/index.html` - HTML structure with modals, overlays, timeline, panels
+- `rewindex/web/styles.css` - Styling for tiles, treemaps, diff viewer, timeline scrubber
+- `rewindex/web/app.js` (2853 lines) - Complex WebSocket client with:
+  - Canvas-based tile/treemap rendering with pan/zoom
+  - Timeline sparkline with scrubber for temporal navigation
+  - Monaco editor integration (code editor + diff editor)
+  - Language color scheme generation and legend
+  - Beads panel for task management
+  - Multiple view modes and search filters
 - Monaco editor loaded from CDN (online), falls back to `<pre>` (offline)
+- Key state variables: scale, offsetX, offsetY, currentAsOfMs, followCliMode, treemapMode, etc.
 
 ## Troubleshooting
 
@@ -395,6 +774,30 @@ python3 -m rewindex.cli serve --host 127.0.0.1 --port 8899
 - Navigate to: `http://localhost:8899/ui`
 - Check browser console for errors
 - Monaco editor requires internet (CDN); will fallback to plain text if offline
+
+**Beads integration not working:**
+- Verify `bd` command is installed: `which bd` or `bd --version`
+- Check if Beads project is initialized in the directory
+- Verify `--beads-root` points to correct directory
+- Check server logs for `[beads/list DEBUG]` messages
+- Check BD_HOME environment variable is set if using custom Beads installation
+
+**Timeline/scrubber not showing data:**
+- Timeline only appears when temporal data exists (file versions over time)
+- Index must have version history; run indexer with `--watch` for a period of time
+- Check that versions index is populated: `rewindex index status`
+
+**TUI not available:**
+- Install TUI dependencies: `pip install rewindex[tui]` or `pip install textual pygments`
+- Verify installation: `python3 -c "from rewindex.tui import TUI_AVAILABLE; print(TUI_AVAILABLE)"`
+- TUI requires textual>=0.47.0 and pygments>=2.17.0
+- Check for errors: `rewindex tui` will show missing dependencies
+
+**TUI transparency not working:**
+- Ensure terminal supports transparency (kitty, alacritty, ghostty, wezterm, etc.)
+- Check terminal emulator configuration has `background_opacity` or similar set
+- Rewindex TUI uses transparent backgrounds by default (no background colors)
+- If using tmux/screen, transparency may not work depending on configuration
 
 ## Performance Considerations
 

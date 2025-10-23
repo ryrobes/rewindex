@@ -9,6 +9,7 @@
   const deletedToggleBtn = document.getElementById('deletedToggle');
   const partialToggleBtn = document.getElementById('partialToggle');
   const fuzzyToggleBtn = document.getElementById('fuzzyToggle');
+  const resultsOnlyBtn = document.getElementById('resultsOnly');
   const treemapModeBtn = document.getElementById('treemapMode');
   const treemapFoldersBtn = document.getElementById('treemapFolders');
   const sizeByBytesBtn = document.getElementById('sizeByBytes');
@@ -50,6 +51,11 @@
   let currentAsOfMs = null;
   let scrubTimer = null;
   let sparkKeys = [];
+
+  // Parse URL parameters to determine initial mode
+  const urlParams = new URLSearchParams(window.location.search);
+  const showAllParam = urlParams.get('show_all') === 'true' || urlParams.get('mode') === 'full';
+
   let followCliMode = false;
   let followUpdatesMode = false;
   let treemapMode = false;
@@ -59,6 +65,8 @@
   let partialMode = false;
   let deletedMode = false;
   let dynTextMode = true; // Default ON for dynamic text sizing
+  let resultsOnlyMode = !showAllParam; // Default TRUE (results only), unless URL param says otherwise
+  let lastSearchResults = []; // Store last search results for results-only mode
   let languageColors = {}; // Map of language -> color
   let languageList = []; // Ordered list of discovered languages
   let recentUpdates = []; // Track recent file updates [{path, action, timestamp}]
@@ -202,7 +210,20 @@
   async function doSearch(){
     if(followCliMode) return; // disabled in follow CLI mode
     if(!qEl.value.trim()) {
-      // Clear dimming on all tiles
+      // Clear search results
+      lastSearchResults = [];
+
+      // In results-only mode, clear canvas when search is empty
+      if(resultsOnlyMode){
+        resultsEl.innerHTML = '<div class="results-count" style="color: #888;">Enter a search query to see results</div>';
+        // Clear canvas
+        for(const [p, tile] of tiles){ tile.remove(); }
+        tiles.clear(); tileContent.clear(); filePos.clear(); fileFolder.clear(); fileLanguages.clear();
+        for(const [, el] of folders){ el.remove(); } folders.clear();
+        return;
+      }
+
+      // In show-all mode, clear dimming on all tiles
       for(const [,tile] of tiles){ tile.classList.remove('dim'); }
       for(const [,el] of folders){ el.classList.remove('dim'); }
       // Clear tracking sets
@@ -227,10 +248,24 @@
       }
     };
     const res = await fetchJSON('/search/simple', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
-    renderResults(res.results||[], res.total||0);
+    const results = res.results || [];
+
+    // Store search results for results-only mode
+    lastSearchResults = results;
+
+    // RESULTS-ONLY MODE: Rebuild canvas with only search results
+    if(resultsOnlyMode){
+      await refreshAllTiles(currentAsOfMs);
+      // Render results sidebar (no dimming needed since we only show matches)
+      renderResults(results, res.total||0, true); // Pass true to skip dimming
+    }
+    // SHOW ALL MODE: Render results and apply dimming to non-matches
+    else {
+      renderResults(results, res.total||0, false);
+    }
   }
 
-  function renderResults(results, total){
+  function renderResults(results, total, skipDimming = false){
     resultsEl.innerHTML = '';
 
     // Add result count at the top
@@ -239,52 +274,60 @@
       countDiv.className = 'results-count';
       const fileCount = results.length;
       const matchCount = results.reduce((sum, r) => sum + (r.matches ? r.matches.length : 0), 0);
-      countDiv.textContent = `${matchCount} matches in ${fileCount} files`;
+      const modeInfo = resultsOnlyMode ? ' (Results Only mode)' : '';
+      countDiv.textContent = `${matchCount} matches in ${fileCount} files${modeInfo}`;
       resultsEl.appendChild(countDiv);
     }
 
-    const matches = new Set(results.map(r => r.file_path));
+    // In results-only mode, skip dimming logic (only matching files are rendered)
+    if(skipDimming) {
+      // Just render the results sidebar
+    }
+    // In show-all mode, apply dimming to non-matching tiles
+    else {
+      const matches = new Set(results.map(r => r.file_path));
 
-    // Dim non-matching tiles - only update tiles that changed state
-    // Track currently dimmed tiles to avoid unnecessary DOM operations
-    if(!window._dimmedTiles) window._dimmedTiles = new Set();
-    const currentlyDimmed = window._dimmedTiles;
+      // Dim non-matching tiles - only update tiles that changed state
+      // Track currently dimmed tiles to avoid unnecessary DOM operations
+      if(!window._dimmedTiles) window._dimmedTiles = new Set();
+      const currentlyDimmed = window._dimmedTiles;
 
-    // Add 'dim' to non-matches (only if not already dimmed)
-    for(const [p, tile] of tiles){
-      if(!matches.has(p)){
-        if(!currentlyDimmed.has(p)){
-          tile.classList.add('dim');
-          currentlyDimmed.add(p);
-        }
-      } else {
-        if(currentlyDimmed.has(p)){
-          tile.classList.remove('dim');
-          currentlyDimmed.delete(p);
+      // Add 'dim' to non-matches (only if not already dimmed)
+      for(const [p, tile] of tiles){
+        if(!matches.has(p)){
+          if(!currentlyDimmed.has(p)){
+            tile.classList.add('dim');
+            currentlyDimmed.add(p);
+          }
+        } else {
+          if(currentlyDimmed.has(p)){
+            tile.classList.remove('dim');
+            currentlyDimmed.delete(p);
+          }
         }
       }
-    }
 
-    // Dim folders with no matching tiles - same optimization
-    if(!window._dimmedFolders) window._dimmedFolders = new Set();
-    const currentlyDimmedFolders = window._dimmedFolders;
-    const folderMatch = new Map();
-    for(const p of matches){
-      const f = fileFolder.get(p) || '';
-      folderMatch.set(f, true);
-    }
+      // Dim folders with no matching tiles - same optimization
+      if(!window._dimmedFolders) window._dimmedFolders = new Set();
+      const currentlyDimmedFolders = window._dimmedFolders;
+      const folderMatch = new Map();
+      for(const p of matches){
+        const f = fileFolder.get(p) || '';
+        folderMatch.set(f, true);
+      }
 
-    for(const [fp, el] of folders){
-      const hasMatch = folderMatch.get(fp);
-      if(!hasMatch){
-        if(!currentlyDimmedFolders.has(fp)){
-          el.classList.add('dim');
-          currentlyDimmedFolders.add(fp);
-        }
-      } else {
-        if(currentlyDimmedFolders.has(fp)){
-          el.classList.remove('dim');
-          currentlyDimmedFolders.delete(fp);
+      for(const [fp, el] of folders){
+        const hasMatch = folderMatch.get(fp);
+        if(!hasMatch){
+          if(!currentlyDimmedFolders.has(fp)){
+            el.classList.add('dim');
+            currentlyDimmedFolders.add(fp);
+          }
+        } else {
+          if(currentlyDimmedFolders.has(fp)){
+            el.classList.remove('dim');
+            currentlyDimmedFolders.delete(fp);
+          }
         }
       }
     }
@@ -681,15 +724,38 @@
   }
 
   async function openTile(path){
-    if(tiles.has(path)) return tiles.get(path);
+    // Check if tile already exists
+    const existingTile = tiles.get(path);
+    if(existingTile){
+      // IMPORTANT: Update position even for existing tiles
+      // This fixes the bug where tiles stack at 0,0 after layout changes
+      const pos = filePos.get(path);
+      if(pos){
+        existingTile.style.left = `${pos.x}px`;
+        existingTile.style.top = `${pos.y}px`;
+        if(pos.w) existingTile.style.width = `${pos.w}px`;
+        if(pos.h) existingTile.style.height = `${pos.h}px`;
+      }
+      return existingTile;
+    }
+
+    // Create new tile
     const tile = document.createElement('div');
     tile.className = 'tile';
-    const pos = filePos.get(path) || {x:0, y:0, w:600, h:400};
-    tile.style.left = `${pos.x}px`;
-    tile.style.top = `${pos.y}px`;
-    // Apply dimensions if specified (treemap mode)
-    if(pos.w) tile.style.width = `${pos.w}px`;
-    if(pos.h) tile.style.height = `${pos.h}px`;
+    const pos = filePos.get(path);
+    if(!pos){
+      // Position not available yet - this shouldn't happen in normal flow
+      // but can occur if openTile is called before layout is complete
+      console.warn(`[openTile] No position found for ${path}, using default`);
+      tile.style.left = '0px';
+      tile.style.top = '0px';
+    } else {
+      tile.style.left = `${pos.x}px`;
+      tile.style.top = `${pos.y}px`;
+      // Apply dimensions if specified (treemap mode)
+      if(pos.w) tile.style.width = `${pos.w}px`;
+      if(pos.h) tile.style.height = `${pos.h}px`;
+    }
     const title = document.createElement('div');
     title.className = 'title';
     title.innerHTML = `<span>${path}</span><span class="right"><button class="btn tiny editbtn" title="Edit" style="display:none;">✎</button><button class="btn tiny dlbtn" title="Download" style="display:none;">⬇</button><span class="lang"></span><span class="updated"></span></span>`;
@@ -1393,6 +1459,44 @@
     }
   }
 
+  function layoutSimpleGrid(paths){
+    // SIMPLE GRID LAYOUT for Results-Only mode - no folders, no complex packing
+    // Just arrange tiles in a regular grid for maximum performance
+
+    // Clear old containers/positions
+    for(const [, el] of folders){ el.remove(); }
+    folders.clear(); filePos.clear(); fileFolder.clear();
+
+    const tileW = 600;
+    const tileH = 400;
+    const gap = 40;
+    const startX = 40;
+    const startY = 40;
+    const tilesPerRow = 15; // 15 tiles per row for wide pannable canvas
+
+    let x = startX;
+    let y = startY;
+    let col = 0;
+
+    for(const p of paths){
+      // Store position
+      filePos.set(p, { x: x, y: y });
+      fileFolder.set(p, ''); // No folder hierarchy
+
+      // Move to next position
+      col++;
+      if(col >= tilesPerRow){
+        // Start new row
+        col = 0;
+        x = startX;
+        y += tileH + gap;
+      } else {
+        // Next column
+        x += tileW + gap;
+      }
+    }
+  }
+
   function layoutTreemap(paths){
     // Spiral/curved packing treemap - fills organically in swooping patterns
     // Clear old containers/positions
@@ -1784,6 +1888,40 @@
     };
   }
 
+  // Results Only toggle
+  if(resultsOnlyBtn){
+    // Set initial state based on URL params
+    resultsOnlyBtn.classList.toggle('active', resultsOnlyMode);
+
+    resultsOnlyBtn.onclick = async ()=>{
+      resultsOnlyMode = !resultsOnlyMode;
+      resultsOnlyBtn.classList.toggle('active', resultsOnlyMode);
+
+      if(resultsOnlyMode){
+        showToast('Results Only mode: showing only search results');
+        // If there's a search query, trigger re-render with results
+        if(qEl.value.trim()){
+          await doSearch();
+        } else {
+          // No search query - show message
+          resultsEl.innerHTML = '<div class="results-count" style="color: #888;">Enter a search query to see results</div>';
+          // Clear canvas
+          for(const [p, tile] of tiles){ tile.remove(); }
+          tiles.clear(); tileContent.clear(); filePos.clear(); fileFolder.clear(); fileLanguages.clear();
+          for(const [, el] of folders){ el.remove(); } folders.clear();
+        }
+      } else {
+        showToast('Show All mode: displaying entire codebase');
+        // Switch to showing all files
+        await refreshAllTiles(currentAsOfMs);
+        // If there was a search, re-apply dimming
+        if(qEl.value.trim()){
+          await doSearch();
+        }
+      }
+    };
+  }
+
   // Follow CLI toggle
   followCliBtn.onclick = ()=>{
     followCliMode = !followCliMode;
@@ -1984,19 +2122,27 @@
     const esrc = new EventSource('/events/indexing');
     esrc.addEventListener('watcher', ()=> { refreshStatus(); refreshTimeline(); });
     esrc.addEventListener('index', ()=> { refreshStatus(); refreshTimeline(); });
-    esrc.addEventListener('query', (ev)=>{
+    esrc.addEventListener('query', async (ev)=>{
       try{
         const data = JSON.parse(ev.data || '{}');
         const payload = data.payload || data;
 
         // Update project root if provided by CLI (regardless of follow mode)
+        let projectJustChanged = false;
         if(payload.project_root && payload.project_root !== currentProjectRoot){
           console.log('[beads DEBUG] CLI project_root changed from', currentProjectRoot, 'to', payload.project_root);
           currentProjectRoot = payload.project_root;
+          projectJustChanged = true;
           // Refresh beads tickets for the new project
           if(beadsAvailable){
             console.log('[beads DEBUG] Refreshing beads tickets for new project');
             refreshBeadsTickets();
+          }
+          // Refresh file list and layout for the new project (in follow mode only)
+          if(followCliMode){
+            console.log('[follow mode] Refreshing tiles for new project');
+            refreshStatus(); // Update status to new project
+            await refreshAllTiles(null); // Reload file list and layout
           }
         }
 
@@ -2009,9 +2155,15 @@
         if(filt.as_of){
           try{ newAsOf = Date.parse(filt.as_of); }catch(e){ newAsOf = null; }
         }
+
         if(newAsOf==null){
-          // live
+          // live - only refresh if project didn't already change
           if(typeof scrubber !== 'undefined'){ scrubber.value = '1000'; currentAsOfMs = null; asofLabel.textContent = 'Live'; }
+          if(!projectJustChanged && currentAsOfMs !== null){
+            // Was on a temporal view, now going live
+            await refreshAllTiles(null);
+            currentAsOfMs = null;
+          }
         }else{
           if(timelineMin!=null && timelineMax!=null && typeof scrubber !== 'undefined'){
             currentAsOfMs = newAsOf;
@@ -2019,7 +2171,10 @@
             const v = Math.round(Math.min(1, Math.max(0, pct)) * 1000);
             scrubber.value = String(v);
             try{ asofLabel.textContent = new Date(currentAsOfMs).toLocaleString(); }catch(e){ asofLabel.textContent = `${currentAsOfMs}`; }
-            refreshAllTiles(currentAsOfMs);
+            // Only refresh if project didn't already change (avoid double refresh)
+            if(!projectJustChanged){
+              await refreshAllTiles(currentAsOfMs);
+            }
           }
         }
         const results = payload.results || [];
@@ -2264,14 +2419,38 @@
     // Determine target file set with metadata
     let list = [];
     let filesWithMeta = [];
-    if(ts==null){
-      const res = await fetchJSON('/files');
-      filesWithMeta = res.files || [];
-      list = filesWithMeta.map(f => f.file_path);
-    } else {
-      const res = await fetchJSON(`/files/at?ts=${ts}`);
-      filesWithMeta = res.files || [];
-      list = filesWithMeta.map(f => f.file_path);
+
+    // RESULTS-ONLY MODE: Only render files from search results (limit 200)
+    if(resultsOnlyMode && lastSearchResults.length > 0){
+      // Use search results instead of fetching all files
+      const maxFiles = 200;
+      const limitedResults = lastSearchResults.slice(0, maxFiles);
+      list = limitedResults.map(r => r.file_path);
+
+      // Fetch metadata for these specific files
+      // NOTE: This is a lightweight approach - we'll fetch content during tile loading
+      filesWithMeta = limitedResults.map(r => ({
+        file_path: r.file_path,
+        size_bytes: r.size_bytes || 0,
+        line_count: r.line_count || 1,
+        language: r.language || 'text'
+      }));
+    }
+    // SHOW ALL MODE: Fetch all files from index
+    else if(!resultsOnlyMode){
+      if(ts==null){
+        const res = await fetchJSON('/files');
+        filesWithMeta = res.files || [];
+        list = filesWithMeta.map(f => f.file_path);
+      } else {
+        const res = await fetchJSON(`/files/at?ts=${ts}`);
+        filesWithMeta = res.files || [];
+        list = filesWithMeta.map(f => f.file_path);
+      }
+    }
+    // RESULTS-ONLY MODE with no search: Do nothing (canvas stays empty)
+    else {
+      return;
     }
 
     // Store file metadata for treemap mode
@@ -2292,13 +2471,17 @@
     tiles.clear(); tileContent.clear(); filePos.clear(); fileFolder.clear(); fileLanguages.clear();
     for(const [, el] of folders){ el.remove(); } folders.clear();
 
-    // Use treemap (flat or with folders) or traditional layout based on mode
+    // Use treemap (flat or with folders), simple grid (results-only), or traditional layout based on mode
     if(treemapMode && treemapFoldersMode){
       const tree = buildTree(list);
       layoutTreemapWithFolders(tree);
     } else if(treemapMode){
       layoutTreemap(list);
+    } else if(resultsOnlyMode){
+      // RESULTS-ONLY MODE: Use simple grid layout (no folder hierarchy for performance)
+      layoutSimpleGrid(list);
     } else {
+      // SHOW ALL MODE: Use traditional folder hierarchy layout
       const tree = buildTree(list);
       layoutAndRender(tree);
     }
@@ -2599,6 +2782,13 @@
 
   async function spawnAll(){
     try{
+      // RESULTS-ONLY MODE: Skip loading all files on initial load
+      // User must perform a search first
+      if(resultsOnlyMode){
+        resultsEl.innerHTML = '<div class="results-count" style="color: #888; padding: 10px;">🔍 <strong>Results Only mode</strong><br/>Enter a search query to see matching files.<br/><br/>Tip: Click "Results Only" button to switch to "Show All" mode.</div>';
+        return;
+      }
+
       const res = await fetchJSON('/files');
       const list = res.files || [];
 

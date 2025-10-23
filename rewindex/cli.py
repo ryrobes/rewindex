@@ -528,6 +528,24 @@ def cmd_view(args: argparse.Namespace) -> int:
         return 1
 
 
+def cmd_tui(args: argparse.Namespace) -> int:
+    """Launch interactive TUI for code search."""
+    from .tui import run_tui, TUI_AVAILABLE, TUI_MISSING_DEPS
+
+    if not TUI_AVAILABLE:
+        print("❌ TUI dependencies not available. Install with:", file=sys.stderr)
+        print("   pip install rewindex[tui]", file=sys.stderr)
+        print("", file=sys.stderr)
+        print("Missing dependencies:", file=sys.stderr)
+        for dep in TUI_MISSING_DEPS:
+            print(f"  - {dep}", file=sys.stderr)
+        return 1
+
+    root = _project_root(Path.cwd())
+    initial_query = args.query if hasattr(args, "query") and args.query else ""
+    return run_tui(project_root=root, initial_query=initial_query)
+
+
 def cmd_usage(args: argparse.Namespace) -> int:
     """Output LLM-agent-friendly usage guide and check system status."""
     root = Path.cwd()
@@ -1043,6 +1061,11 @@ def build_parser() -> argparse.ArgumentParser:
     sp_restore.add_argument("--output", "-o", help="Output path (default: restore to original location)")
     sp_restore.add_argument("--force", "-f", action="store_true", help="Overwrite existing file")
     sp_restore.set_defaults(func=cmd_restore)
+
+    # tui
+    sp_tui = sub.add_parser("tui", help="Launch interactive TUI for code search")
+    sp_tui.add_argument("query", nargs="?", help="Initial search query (optional)")
+    sp_tui.set_defaults(func=cmd_tui)
 
     # usage (LLM-friendly help)
     sp_usage = sub.add_parser("usage", help="Show LLM-agent-friendly usage guide with system status check")
