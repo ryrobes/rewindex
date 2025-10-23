@@ -143,26 +143,67 @@ def simple_search_es(
     res = es.search(index, body)
     hits = res.get("hits", {}).get("hits", [])
     results: List[Dict[str, Any]] = []
+
+    # DEBUG: Track highlight fragment statistics
+    debug_stats = {"total_hits": 0, "hits_with_hl": 0, "total_fragments": 0, "total_matches": 0}
+
     for h in hits:
+        debug_stats["total_hits"] += 1
         src = h.get("_source", {})
         hl_list = h.get("highlight", {}).get("content", [])
         content = src.get("content", "")
 
+        # DEBUG: Log highlight fragments
+        if hl_list:
+            debug_stats["hits_with_hl"] += 1
+            debug_stats["total_fragments"] += len(hl_list)
+            if debug_stats["total_hits"] <= 5:  # Only log first 5 files
+                print(f"[DEBUG] File: {src.get('file_path', 'unknown')[-50:]}")
+                print(f"  Fragments from ES: {len(hl_list)}")
+                # Show first 3 fragments
+                for i, frag in enumerate(hl_list[:3]):
+                    print(f"    Fragment {i+1}: {frag[:100]}")
+
         matches: List[Dict[str, Any]] = []
-        used_lines = set()
+        line_match_counts = {}  # Track how many times each line matched
         # Build matches from highlight fragments when available
-        for frag in hl_list[:10]:
+        for frag_idx, frag in enumerate(hl_list[:10]):
             line_no, before_ctx, after_ctx, line_highlight = _compute_line_context(
                 content, frag, query, options.context_lines, apply_markup=options.highlight
             )
-            if line_no and line_no not in used_lines:
-                used_lines.add(line_no)
-                matches.append({
-                    "line": line_no,
-                    "content": None,
-                    "highlight": line_highlight or frag,
-                    "context": {"before": before_ctx, "after": after_ctx},
-                })
+
+            # DEBUG: Log line mapping for first file
+            if debug_stats["total_hits"] <= 1 and frag_idx < 3:
+                print(f"    Fragment {frag_idx+1} mapped to line: {line_no}")
+
+            if line_no:
+                # Track match count per line
+                if line_no not in line_match_counts:
+                    line_match_counts[line_no] = 0
+                    # Add this line as a match (first occurrence)
+                    matches.append({
+                        "line": line_no,
+                        "content": None,
+                        "highlight": line_highlight or frag,
+                        "context": {"before": before_ctx, "after": after_ctx},
+                        "match_count": 1  # Will be updated below
+                    })
+                # Increment count for this line
+                line_match_counts[line_no] += 1
+            elif debug_stats["total_hits"] <= 5:  # DEBUG: Log why we skipped
+                print(f"  Skipped fragment (line is None)")
+
+        # Update match_count for each line
+        for match in matches:
+            match["match_count"] = line_match_counts.get(match["line"], 1)
+
+        # DEBUG: Log match creation results
+        if debug_stats["total_hits"] <= 5:
+            total_occurrences = sum(line_match_counts.values())
+            print(f"  Created matches: {len(matches)} unique lines ({total_occurrences} total occurrences)")
+            if line_match_counts:
+                print(f"  Match counts per line: {dict(sorted(line_match_counts.items()))}")
+        debug_stats["total_matches"] += len(matches)
 
         # Fallback: ensure at least one match by using query-based matching
         if not matches:
@@ -201,6 +242,15 @@ def simple_search_es(
             for r in results:
                 r["score_pct"] = 0.0
 
+    # DEBUG: Print summary statistics
+    print(f"\n[DEBUG SUMMARY]")
+    print(f"  Total hits: {debug_stats['total_hits']}")
+    print(f"  Hits with highlights: {debug_stats['hits_with_hl']}")
+    print(f"  Total ES fragments: {debug_stats['total_fragments']}")
+    print(f"  Total matches created: {debug_stats['total_matches']}")
+    print(f"  Avg fragments per hit: {debug_stats['total_fragments'] / max(1, debug_stats['hits_with_hl']):.1f}")
+    print(f"  Avg matches per result: {debug_stats['total_matches'] / max(1, debug_stats['total_hits']):.1f}")
+
     out: Dict[str, Any] = {"total_hits": len(results), "results": results}
     if debug:
         out["debug"] = {"query": body, "took": res.get("took")}
@@ -213,7 +263,37 @@ def _compute_line_context(content: str, highlight_fragment: str, query: str, con
 
     lines = content.splitlines()
 
-    # Try to determine the best matching line by marked tokens
+    # NEW STRATEGY: Find where the fragment text appears in the content
+    # Strip <mark> tags from fragment to get clean text
+    if highlight_fragment:
+        clean_fragment = re.sub(r'</?mark>', '', highlight_fragment)
+        # Try to find a unique substring from the fragment (at least 20 chars)
+        search_text = clean_fragment.strip()
+        if len(search_text) >= 20:
+            # Use a substantial substring to locate this specific fragment
+            search_substring = search_text[:60]  # Use first 60 chars
+            pos = content.find(search_substring)
+            if pos >= 0:
+                # Found it! Count newlines before this position
+                line_no = content.count("\n", 0, pos) + 1
+                idx_line = line_no - 1
+                if 0 <= idx_line < len(lines):
+                    line_text = lines[idx_line]
+                    # Extract marked tokens and apply highlighting
+                    marked_tokens = _all_marked_tokens(highlight_fragment)
+                    hl_line = line_text
+                    if apply_markup and marked_tokens:
+                        lowered_tokens = [t.lower() for t in marked_tokens if t]
+                        for tok in sorted(set(lowered_tokens), key=len, reverse=True):
+                            pattern = re.compile(re.escape(tok), re.IGNORECASE)
+                            hl_line = pattern.sub(lambda m: f"<mark>{m.group(0)}</mark>", hl_line)
+                    start_ctx = max(0, idx_line - max(0, int(context_lines)))
+                    end_ctx = min(len(lines), idx_line + 1 + max(0, int(context_lines)))
+                    before = lines[start_ctx:idx_line]
+                    after = lines[idx_line + 1:end_ctx]
+                    return line_no, before, after, hl_line
+
+    # OLD STRATEGY (fallback): Find line with most marked tokens
     marked_tokens = _all_marked_tokens(highlight_fragment)
     best_line = None
     best_score = -1

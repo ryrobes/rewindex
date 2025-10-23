@@ -921,6 +921,18 @@ body {
   word-break: break-word;
   overflow-wrap: break-word;
   flex: 1;
+  border-radius: 3px;
+  transition: background 0.15s ease, border-left 0.15s ease;
+}
+
+.result-file:hover {
+  background: rgba(57, 186, 230, 0.08);
+}
+
+.result-file.active {
+  background: rgba(57, 186, 230, 0.2);
+  border-left: 3px solid var(--accent);
+  padding-left: 3px;
 }
 
 .result-file.deleted {
@@ -976,11 +988,44 @@ body {
   word-break: break-word;
   overflow-wrap: break-word;
   white-space: normal;
+  border-radius: 2px;
+  border-left: 2px solid transparent;
+  transition: all 0.15s ease;
 }
 
 .result-match:hover {
   color: var(--text);
-  background: rgba(57, 186, 230, 0.16);
+  background: rgba(57, 186, 230, 0.12);
+}
+
+.result-match.active {
+  color: var(--text);
+  background: rgba(57, 186, 230, 0.25);
+  border-left: 2px solid var(--accent);
+  padding-left: 4px;
+}
+
+.match-score {
+  font-size: 10px;
+  color: #ffb86c;
+  opacity: 0.8;
+  margin-left: 8px;
+}
+
+.match-score-subtle {
+  font-size: 9px;
+  color: #6272a4;
+  opacity: 0.6;
+  margin-left: 8px;
+  float: right;
+}
+
+.match-count {
+  font-size: 10px;
+  color: #8be9fd;
+  opacity: 0.9;
+  margin-left: 4px;
+  font-weight: 600;
 }
 
 .result-match mark {

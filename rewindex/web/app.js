@@ -439,14 +439,112 @@
   function renderResults(results, total, skipDimming = false){
     resultsEl.innerHTML = '';
 
+    // DEBUG: Log raw results BEFORE grouping
+    console.log('🔍 [renderResults] Raw results from API:', results.length);
+
+    // Print full structure of first 5 results
+    console.log('🔍 [renderResults] First 5 results structure:');
+    results.slice(0, 5).forEach((r, idx) => {
+      console.log(`\n--- Result ${idx + 1} ---`);
+      console.log('file_path:', r.file_path);
+      console.log('score:', r.score);
+      console.log('score_pct:', r.score_pct);
+      console.log('deleted:', r.deleted);
+      console.log('matches:', r.matches ? r.matches.length : 0);
+      if(r.matches && r.matches.length > 0){
+        console.log('matches detail:');
+        r.matches.forEach((m, mIdx) => {
+          console.log(`  Match ${mIdx + 1}:`, {
+            line: m.line,
+            highlight: m.highlight ? m.highlight.substring(0, 80) + '...' : null,
+            context_before: m.context_before ? m.context_before.length : 0,
+            context_after: m.context_after ? m.context_after.length : 0
+          });
+        });
+      }
+    });
+
+    // Count duplicates (same file appearing multiple times)
+    const filePathCounts = new Map();
+    results.forEach(r => {
+      filePathCounts.set(r.file_path, (filePathCounts.get(r.file_path) || 0) + 1);
+    });
+    console.log('\n🔍 [renderResults] Files appearing multiple times in results array:',
+      Array.from(filePathCounts.entries())
+        .filter(([path, count]) => count > 1)
+        .map(([path, count]) => `${path.substring(path.lastIndexOf('/') + 1)}: ${count} times`)
+    );
+
+    // Check if ANY results have multiple matches within them
+    const multiMatchFiles = results.filter(r => r.matches && r.matches.length > 1);
+    console.log('\n🔍 [renderResults] Files with multiple matches within one result:', multiMatchFiles.length);
+    if(multiMatchFiles.length > 0){
+      console.log('Examples:');
+      multiMatchFiles.slice(0, 3).forEach(r => {
+        console.log(`  - ${r.file_path.substring(r.file_path.lastIndexOf('/') + 1)}: ${r.matches.length} matches`);
+      });
+    }
+
+    // GROUP RESULTS BY FILE: Combine multiple result sets from same file
+    const groupedByFile = new Map();
+    results.forEach(r => {
+      if(!groupedByFile.has(r.file_path)){
+        groupedByFile.set(r.file_path, []);
+      }
+      groupedByFile.get(r.file_path).push(r);
+    });
+
+    // Sort each file's results by score descending
+    for(const [path, fileResults] of groupedByFile){
+      fileResults.sort((a, b) => (b.score || 0) - (a.score || 0));
+    }
+
+    // Convert to array and sort by highest score in each file
+    const groupedResults = Array.from(groupedByFile.entries()).map(([path, fileResults]) => {
+      const highestScore = Math.max(...fileResults.map(r => r.score || 0));
+      const highestScorePct = Math.max(...fileResults.map(r => r.score_pct || 0));
+
+      // DEBUG: Log first 3 files' scores
+      const fileName = path.substring(path.lastIndexOf('/') + 1);
+      if(groupedByFile.size <= 5){
+        console.log(`[Score Debug] ${fileName}:`, {
+          raw_score: highestScore.toFixed(2),
+          score_pct: highestScorePct.toFixed(1),
+          result_sets: fileResults.length,
+          all_scores: fileResults.map(r => r.score_pct || r.score)
+        });
+      }
+
+      return {
+        file_path: path,
+        resultSets: fileResults,
+        highestScore: highestScorePct || highestScore, // Use score_pct if available
+        // Count total occurrences (using match_count if available)
+        totalMatches: fileResults.reduce((sum, r) => {
+          if(!r.matches) return sum;
+          return sum + r.matches.reduce((mSum, m) => mSum + (m.match_count || 1), 0);
+        }, 0),
+        deleted: fileResults[0].deleted // Take from first result
+      };
+    });
+
+    // Sort files by highest score
+    groupedResults.sort((a, b) => b.highestScore - a.highestScore);
+
     // Add result count at the top
-    if(results.length > 0){
+    if(groupedResults.length > 0){
       const countDiv = document.createElement('div');
       countDiv.className = 'results-count';
-      const fileCount = results.length;
-      const matchCount = results.reduce((sum, r) => sum + (r.matches ? r.matches.length : 0), 0);
+      const fileCount = groupedResults.length;
+      const matchCount = groupedResults.reduce((sum, g) => sum + g.totalMatches, 0);
+      const resultSetCount = results.length;
       const modeInfo = resultsOnlyMode ? ' (Results Only mode)' : '';
-      countDiv.textContent = `${matchCount} matches in ${fileCount} files${modeInfo}`;
+
+      if(resultSetCount > fileCount){
+        countDiv.textContent = `${matchCount} matches in ${fileCount} files (${resultSetCount} result sets)${modeInfo}`;
+      } else {
+        countDiv.textContent = `${matchCount} matches in ${fileCount} files${modeInfo}`;
+      }
       resultsEl.appendChild(countDiv);
     }
 
@@ -502,10 +600,11 @@
         }
       }
     }
-    // Results list: per-file group with per-match lines
-    results.forEach((r, idx)=>{
+    // Results list: grouped by file, showing all matches per file
+    groupedResults.forEach((fileGroup, idx)=>{
       const grp = document.createElement('div');
       grp.className = 'result-group';
+      grp.setAttribute('data-file-path', fileGroup.file_path);
 
       // File header with score badge
       const fileHeader = document.createElement('div');
@@ -513,12 +612,20 @@
 
       const file = document.createElement('div');
       file.className = 'result-file';
-      if(r.deleted) file.classList.add('deleted');
-      file.textContent = r.file_path;
-      file.onclick = ()=> { focusResult(r); file.scrollIntoView({block:'nearest'}); };
+      if(fileGroup.deleted) file.classList.add('deleted');
+      file.textContent = fileGroup.file_path;
+
+      // Click file header to focus on file (first result set, first match)
+      file.onclick = ()=> {
+        // Clear previous active states
+        document.querySelectorAll('.result-file.active, .result-match.active').forEach(el => el.classList.remove('active'));
+        file.classList.add('active');
+        focusResult(fileGroup.resultSets[0]);
+        file.scrollIntoView({block:'nearest'});
+      };
 
       // Add deleted badge
-      if(r.deleted){
+      if(fileGroup.deleted){
         const deletedBadge = document.createElement('span');
         deletedBadge.className = 'deleted-badge';
         deletedBadge.textContent = 'DELETED';
@@ -526,34 +633,81 @@
         fileHeader.appendChild(deletedBadge);
       }
 
-      // Add score badge
-      if(r.score_pct !== undefined){
-        const scoreBadge = document.createElement('span');
-        scoreBadge.className = 'score-badge';
-        scoreBadge.textContent = `${r.score_pct}%`;
-        scoreBadge.setAttribute('data-score', r.score_pct);
-        fileHeader.appendChild(file);
-        fileHeader.appendChild(scoreBadge);
+      // Add score badge with additional info if multiple result sets
+      const scoreBadge = document.createElement('span');
+      scoreBadge.className = 'score-badge';
+      if(fileGroup.resultSets.length > 1){
+        scoreBadge.textContent = `${Math.round(fileGroup.highestScore)}% (${fileGroup.resultSets.length} sets)`;
+        scoreBadge.title = `${fileGroup.totalMatches} total matches across ${fileGroup.resultSets.length} result sets`;
       } else {
-        fileHeader.appendChild(file);
+        scoreBadge.textContent = `${Math.round(fileGroup.highestScore)}%`;
       }
+      scoreBadge.setAttribute('data-score', Math.round(fileGroup.highestScore));
+      fileHeader.appendChild(file);
+      fileHeader.appendChild(scoreBadge);
 
-      const ol = document.createElement('div');
-      ol.className = 'result-matches';
-      (r.matches||[]).forEach((m)=>{
-        const item = document.createElement('div');
-        item.className = 'result-match';
-        const ln = m.line ? `:${m.line}` : '';
-        const snippet = m.highlight || '';
-        // Use innerHTML to render <mark> tags for highlighting
-        item.innerHTML = `${ln}  ${snippet.slice(0,120)}`;
-        item.onclick = ()=> { focusLine(r.file_path, m.line, qEl.value); item.scrollIntoView({block:'nearest'}); };
-        ol.appendChild(item);
+      // Render ALL matches from ALL result sets
+      const matchesContainer = document.createElement('div');
+      matchesContainer.className = 'result-matches';
+
+      // DEBUG: Log what we're rendering
+      console.log(`📊 [renderResults] File: ${fileGroup.file_path.substring(fileGroup.file_path.lastIndexOf('/') + 1)}`, {
+        resultSets: fileGroup.resultSets.length,
+        totalMatches: fileGroup.totalMatches
       });
+
+      fileGroup.resultSets.forEach((resultSet, setIdx) => {
+        const matches = resultSet.matches || [];
+        const totalOccurrences = matches.reduce((sum, m) => sum + (m.match_count || 1), 0);
+        console.log(`  └─ Result set ${setIdx + 1}:`, {
+          matches: matches.length,
+          total_occurrences: totalOccurrences,
+          score: resultSet.score_pct || Math.round(resultSet.score || 0)
+        });
+
+        matches.forEach((m, matchIdx)=>{
+          const item = document.createElement('div');
+          item.className = 'result-match';
+          item.setAttribute('data-line', m.line || 0);
+
+          // Build line number with match count if > 1
+          let ln = '';
+          if(m.line){
+            ln = `:${m.line}`;
+            if(m.match_count && m.match_count > 1){
+              ln += ` <span class="match-count">(${m.match_count}×)</span>`;
+            }
+          }
+          const snippet = m.highlight || '';
+
+          // ALWAYS show individual match score (subtle, at end of line)
+          const matchScore = resultSet.score_pct || Math.round(resultSet.score || 0);
+
+          // Use innerHTML to render <mark> tags for highlighting
+          item.innerHTML = `${ln}  ${snippet.slice(0,120)} <span class="match-score-subtle">${matchScore}%</span>`;
+
+
+          item.onclick = ()=> {
+            // Clear previous active states
+            document.querySelectorAll('.result-file.active, .result-match.active').forEach(el => el.classList.remove('active'));
+            item.classList.add('active');
+            focusLine(fileGroup.file_path, m.line, qEl.value);
+            item.scrollIntoView({block:'nearest'});
+          };
+          matchesContainer.appendChild(item);
+        });
+      });
+
       grp.appendChild(fileHeader);
-      grp.appendChild(ol);
+      grp.appendChild(matchesContainer);
       resultsEl.appendChild(grp);
-      if(idx === 0) { focusResult(r); grp.scrollIntoView({block:'nearest'}); }
+
+      // Auto-focus first result on initial render
+      if(idx === 0) {
+        file.classList.add('active');
+        focusResult(fileGroup.resultSets[0]);
+        grp.scrollIntoView({block:'nearest'});
+      }
     });
   }
 
