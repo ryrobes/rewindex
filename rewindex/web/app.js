@@ -332,6 +332,8 @@
 
   async function doSearch(){
     const perfStart = performance.now();
+    const spinner = document.getElementById('primarySpinner');
+
     console.log('🔍 [doSearch] START', {
       query: qEl.value,
       existingTiles: tiles.size,
@@ -346,7 +348,15 @@
     }
 
     if(followCliMode) return; // disabled in follow CLI mode
+
+    // Show spinner
+    if(spinner) spinner.style.display = 'flex';
+    resultsEl.innerHTML = '';
+
     if(!qEl.value.trim()) {
+      // Hide spinner for empty query
+      if(spinner) spinner.style.display = 'none';
+
       // Clear search results
       lastSearchResults = [];
 
@@ -375,7 +385,6 @@
       renderRecentUpdates();
       return;
     }
-    resultsEl.innerHTML = '';
 
     const body = {
       query: qEl.value,
@@ -391,6 +400,9 @@
     };
     const res = await fetchJSON('/search/simple', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
     const results = res.results || [];
+
+    // Hide spinner
+    if(spinner) spinner.style.display = 'none';
 
     // Store search results for results-only mode
     lastSearchResults = results;
@@ -978,12 +990,18 @@
       </div>
     `;
 
-    // Results container
+    // Results container with spinner
     const resultsDiv = document.createElement('div');
     resultsDiv.className = 'filter-panel-results';
     resultsDiv.innerHTML = `
-      <div style="color: #888; font-size: 11px; padding: 8px;">
-        Enter a query to refine results further
+      <div class="search-spinner filter-spinner" style="display:none;">
+        <div class="spinner-ring"></div>
+        <div class="spinner-text">Searching...</div>
+      </div>
+      <div class="filter-results-content">
+        <div style="color: #888; font-size: 11px; padding: 8px;">
+          Enter a query to refine results further
+        </div>
       </div>
     `;
 
@@ -1066,12 +1084,21 @@
     const query = input.value.trim();
     panel.query = query;
 
+    // Get spinner element
+    const spinner = panel.element.querySelector('.filter-spinner');
+    const resultsContent = panel.element.querySelector('.filter-results-content');
+
     if(!query){
       panel.results = [];
+      if(spinner) spinner.style.display = 'none';
       renderFilterPanelResults(panel);
       if(!skipHighlighting) updateAllFilterHighlighting();
       return;
     }
+
+    // Show spinner
+    if(spinner) spinner.style.display = 'flex';
+    if(resultsContent) resultsContent.style.display = 'none';
 
     // Search via API
     const body = {
@@ -1120,6 +1147,11 @@
 
       panel.rawResults = allResults; // Store raw results for use by next panels
       panel.results = cumulativeResults; // Store cumulative intersection for display
+
+      // Hide spinner and show results
+      if(spinner) spinner.style.display = 'none';
+      if(resultsContent) resultsContent.style.display = 'block';
+
       renderFilterPanelResults(panel);
 
       // Update all subsequent panels (they need to recompute their intersections)
@@ -1137,6 +1169,9 @@
       if(!skipHighlighting) updateAllFilterHighlighting();
     } catch(e){
       console.error('Filter search error:', e);
+      // Hide spinner on error
+      if(spinner) spinner.style.display = 'none';
+      if(resultsContent) resultsContent.style.display = 'block';
       showToast('Search failed');
     }
   }
@@ -1194,13 +1229,21 @@
 
   // Render results in a filter panel (same format as primary results)
   function renderFilterPanelResults(panel){
-    const resultsDiv = panel.element.querySelector('.filter-panel-results');
-    resultsDiv.innerHTML = '';
+    // Use filter-results-content wrapper instead of clearing entire resultsDiv (preserves spinner)
+    let resultsContent = panel.element.querySelector('.filter-results-content');
+    if(!resultsContent){
+      // Fallback: create wrapper if it doesn't exist
+      const resultsDiv = panel.element.querySelector('.filter-panel-results');
+      resultsContent = document.createElement('div');
+      resultsContent.className = 'filter-results-content';
+      resultsDiv.appendChild(resultsContent);
+    }
 
+    resultsContent.innerHTML = '';
     const results = panel.results;
 
     if(results.length === 0 && !panel.query){
-      resultsDiv.innerHTML = `
+      resultsContent.innerHTML = `
         <div style="color: #888; font-size: 11px; padding: 8px;">
           Enter a query to refine results further
         </div>
@@ -1209,7 +1252,7 @@
     }
 
     if(results.length === 0){
-      resultsDiv.innerHTML = `
+      resultsContent.innerHTML = `
         <div style="color: #888; font-size: 11px; padding: 8px;">
           No matches in cumulative intersection
         </div>
@@ -1223,7 +1266,7 @@
     const fileCount = results.length;
     const matchCount = results.reduce((sum, r) => sum + (r.matches ? r.matches.length : 0), 0);
     countDiv.textContent = `${matchCount} matches in ${fileCount} files`;
-    resultsDiv.appendChild(countDiv);
+    resultsContent.appendChild(countDiv);
 
     // Results list: per-file group with per-match lines (same as primary)
     results.forEach((r, idx) => {
@@ -1277,7 +1320,7 @@
 
       grp.appendChild(fileHeader);
       grp.appendChild(ol);
-      resultsDiv.appendChild(grp);
+      resultsContent.appendChild(grp);
 
       // DON'T auto-focus in filter panels - causes performance issues
       // Only focus when user explicitly clicks
