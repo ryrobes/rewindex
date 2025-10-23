@@ -33,9 +33,13 @@
 
 <body>
   <div id="sidebar">
+    <!-- Add Filter Nub (tab that sticks out) -->
+    <div id="addFilterNub" class="add-filter-nub" title="Add filter panel">
+      <span>+</span>
+    </div>
 
     <div class="section results-section">
-      
+
       <div id="results"></div>
     </div>
     <div class="section language-bar-section">
@@ -62,6 +66,10 @@
     </div>
     <!-- <img src="/static/logo.png" alt="Rewindex Logo" id="logo" width="100px" /> -->
   </div>
+
+  <!-- Dynamic Filter Panels Container -->
+  <div id="filterPanelsContainer"></div>
+
   <div id="workspace">
     <div class="search-container">
       <button id="clearSearch" class="clear-search" title="Clear search">×</button>
@@ -118,26 +126,18 @@
   </div>
   <div id="toasts" class="toasts"></div>
 
-  <!-- Beads Panel (right side) -->
-  <div id="beadsPanel" class="beads-panel collapsed">
-    <div class="beads-header">
-      <h3>Beads</h3>
-      <button id="beadsPanelToggle" class="beads-toggle-btn" title="Toggle Beads panel">⟨</button>
-    </div>
-    <div class="beads-content">
-      <div class="beads-filters">
-        <button class="beads-filter-btn active" data-filter="all">All</button>
-        <button class="beads-filter-btn" data-filter="open">Open</button>
-        <button class="beads-filter-btn" data-filter="in_progress">In Progress</button>
-        <button class="beads-filter-btn" data-filter="ready">Ready</button>
-        <button class="beads-filter-btn" data-filter="closed">Closed</button>
-      </div>
-      <div id="beadsTickets" class="beads-tickets">
-        <div class="beads-loading">Checking for Beads...</div>
-      </div>
-    </div>
+  <!-- DISABLED: Old secondary sidebar (replaced with multi-panel system)
+  <div id="secondarySidebar" class="secondary-sidebar collapsed">
+    ...
   </div>
-  <button id="beadsPanelTab" class="beads-panel-tab">0</button>
+  -->
+
+  <!-- DISABLED: Beads Panel (commented out for now)
+  <div id="beadsPanel" class="beads-panel collapsed" style="display:none;">
+    ...
+  </div>
+  <button id="beadsPanelTab" class="beads-panel-tab" style="display:none;">0</button>
+  -->
 
   <script src="/static/app.js"></script>
 </body>

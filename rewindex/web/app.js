@@ -77,17 +77,131 @@
   let diffEditorPath = null; // Current file path in diff mode
   let diffHistoricalContent = null; // Historical content for restore
   let currentProjectRoot = null; // Current project root directory
-  let beadsAvailable = false; // Whether bd command is available
-  let beadsInitialized = false; // Whether beads has been checked
-  let beadsTickets = []; // All Beads tickets
-  let beadsCurrentFilter = 'all'; // Current filter
-  let beadsPollInterval = null; // Polling interval for Beads updates
+  // DISABLED: Beads integration (commented out for now)
+  // let beadsAvailable = false;
+  // let beadsInitialized = false;
+  // let beadsTickets = [];
+  // let beadsCurrentFilter = 'all';
+  // let beadsPollInterval = null;
+
+  // Multi-Panel Filter System
+  // Each filter panel represents a refinement layer
+  // filterPanels = [{id, query, results, fuzzyMode, partialMode, element}]
+  let filterPanels = []; // Array of active filter panels
+  let nextFilterId = 1; // Auto-increment ID for panels
+  const MAX_FILTER_PANELS = 5; // Limit to prevent UI clutter
+
+  // Background content pre-loading
+  let preloadAbortController = null; // Allow cancelling in-progress preload
+  let preloadCache = new Map(); // Cache fetched file data: path -> {content, language, ...}
+
+  // PERFORMANCE MONITORING: Track memory usage
+  let perfMemoryCheckInterval = null;
+  function startMemoryMonitoring(){
+    if(perfMemoryCheckInterval) return;
+    perfMemoryCheckInterval = setInterval(() => {
+      console.log('💾 [MEMORY SNAPSHOT]', {
+        tiles: tiles.size,
+        tileContent: tileContent.size,
+        filePos: filePos.size,
+        fileFolder: fileFolder.size,
+        fileLanguages: fileLanguages.size,
+        folders: folders.size,
+        fileMeta: fileMeta.size,
+        filterPanels: filterPanels.length,
+        canvasChildren: canvas.children.length,
+        resultsChildren: resultsEl ? resultsEl.children.length : 0,
+        activeAnimations: activeAnimationCount,
+        currentAnimId: currentAnimationId,
+        preloadCacheSize: preloadCache.size
+      });
+    }, 5000); // Every 5 seconds
+  }
+
+  // Background file content preloader (non-blocking)
+  async function startBackgroundPreload(filePaths){
+    // Cancel any existing preload
+    if(preloadAbortController){
+      preloadAbortController.abort();
+      console.log('🛑 [preload] Cancelled previous preload');
+    }
+
+    preloadAbortController = new AbortController();
+    const signal = preloadAbortController.signal;
+
+    console.log('🔄 [preload] Starting background preload & render', {
+      files: filePaths.length,
+      cacheSize: preloadCache.size
+    });
+
+    const BATCH_SIZE = 5; // Load 5 files at a time
+    const YIELD_MS = 50; // Yield to main thread every 50ms
+
+    let loaded = 0;
+    let rendered = 0;
+    let cached = 0;
+    let failed = 0;
+
+    for(let i = 0; i < filePaths.length; i += BATCH_SIZE){
+      // Check if cancelled
+      if(signal.aborted){
+        console.log('⏹️  [preload] Aborted', { loaded, rendered, cached, failed });
+        return;
+      }
+
+      // Process batch
+      const batch = filePaths.slice(i, i + BATCH_SIZE);
+      const promises = batch.map(async path => {
+        // Skip if already cached AND rendered
+        if(preloadCache.has(path) && tileContent.has(path)){
+          cached++;
+          return;
+        }
+
+        try {
+          const data = await fetchJSON('/file?path=' + encodeURIComponent(path));
+          if(!signal.aborted){
+            preloadCache.set(path, data);
+            loaded++;
+
+            // RENDER content into tile (non-blocking, async)
+            // Only render if tile exists (user hasn't navigated away)
+            if(tiles.has(path)){
+              await loadTileContent(path, data, null, null); // No focus, no search query
+              rendered++;
+            }
+          }
+        } catch(e){
+          failed++;
+          console.warn(`[preload] Failed to load ${path}:`, e.message);
+        }
+      });
+
+      await Promise.all(promises);
+
+      // Yield to main thread (allows UI to stay responsive)
+      if(i + BATCH_SIZE < filePaths.length){
+        await new Promise(resolve => setTimeout(resolve, YIELD_MS));
+      }
+    }
+
+    console.log('✅ [preload] Complete', {
+      loaded,
+      rendered,
+      cached,
+      failed,
+      totalCacheSize: preloadCache.size
+    });
+    preloadAbortController = null;
+  }
 
   let scale = 1.0;
   let offsetX = 40;
   let offsetY = 40;
   let isAnimating = false;
   let animHandle = null;
+  let currentAnimationId = 0; // Track animation generations to prevent callback hell
+  let activeAnimationCount = 0; // DEBUG: Count simultaneously running animations
   let dragging = false;
   let dragStart = [0,0];
 
@@ -150,6 +264,14 @@
     return r.json();
   }
 
+  function debounce(func, wait){
+    let timeout;
+    return function(...args){
+      clearTimeout(timeout);
+      timeout = setTimeout(() => func.apply(this, args), wait);
+    };
+  }
+
   function adjustTimelineLeft(){
     const sidebar = document.getElementById('sidebar');
     const left = sidebar ? sidebar.offsetWidth : 320;
@@ -174,11 +296,12 @@
       }
 
       // Initialize beads on first load after we have project root
-      if(currentProjectRoot && !beadsInitialized){
-        console.log('[beads DEBUG] First load - checking beads availability');
-        beadsInitialized = true;
-        checkBeadsAvailable();
-      }
+      // DISABLED: Beads integration
+      // if(currentProjectRoot && !beadsInitialized){
+      //   console.log('[beads DEBUG] First load - checking beads availability');
+      //   beadsInitialized = true;
+      //   checkBeadsAvailable();
+      // }
 
       // Simplified status display
       row('Host', s.host);
@@ -208,10 +331,29 @@
   }
 
   async function doSearch(){
+    const perfStart = performance.now();
+    console.log('🔍 [doSearch] START', {
+      query: qEl.value,
+      existingTiles: tiles.size,
+      filterPanels: filterPanels.length,
+      cachedFiles: preloadCache.size
+    });
+
+    // Clear preload cache for new search (different result set)
+    if(preloadCache.size > 0){
+      console.log('🗑️  [doSearch] Clearing preload cache', { size: preloadCache.size });
+      preloadCache.clear();
+    }
+
     if(followCliMode) return; // disabled in follow CLI mode
     if(!qEl.value.trim()) {
       // Clear search results
       lastSearchResults = [];
+
+      // Clear all filter panels when primary is cleared
+      while(filterPanels.length > 0){
+        removeFilterPanel(filterPanels[0].id);
+      }
 
       // In results-only mode, clear canvas when search is empty
       if(resultsOnlyMode){
@@ -239,7 +381,7 @@
       query: qEl.value,
       filters: currentAsOfMs ? { as_of_ms: currentAsOfMs } : {},
       options: {
-        limit: 500,
+        limit: 200,
         context_lines: 2,
         highlight: true,
         fuzziness: fuzzyMode ? 'AUTO' : undefined,
@@ -262,6 +404,35 @@
     // SHOW ALL MODE: Render results and apply dimming to non-matches
     else {
       renderResults(results, res.total||0, false);
+    }
+
+    // Trigger filter panel updates (they need to re-compute based on new primary results)
+    // PERFORMANCE: Update all panels first, THEN update highlighting once at the end
+    for(const panel of filterPanels){
+      if(panel.query){
+        await updateFilterPanel(panel.id, true); // Pass skipHighlighting=true
+      }
+    }
+    // Update highlighting once after all panels updated (instead of once per panel)
+    // PERFORMANCE: Defer highlighting to next animation frame (non-blocking)
+    if(filterPanels.length > 0){
+      requestAnimationFrame(() => updateAllFilterHighlighting());
+    }
+
+    const perfEnd = performance.now();
+    console.log('✅ [doSearch] END', {
+      duration: `${(perfEnd - perfStart).toFixed(2)}ms`,
+      resultCount: results.length,
+      tilesNow: tiles.size
+    });
+
+    // Start background preload of file content (non-blocking)
+    if(results.length > 0){
+      const filePaths = results.map(r => r.file_path);
+      // Don't await - let it run in background
+      startBackgroundPreload(filePaths).catch(e => {
+        console.error('[preload] Error:', e);
+      });
     }
   }
 
@@ -449,6 +620,621 @@
       resultsEl.appendChild(grp);
     });
   }
+
+  // DISABLED: Old secondary filter functions (replaced with multi-panel system)
+  // Keeping commented for reference during transition
+  /*
+  async function doSecondarySearch(){
+    if(!secondaryFilterEnabled) return;
+
+    const secondaryQueryEl = document.getElementById('secondaryQuery');
+    if(!secondaryQueryEl) return;
+
+    // If secondary query is empty, clear secondary results and highlighting
+    if(!secondaryQueryEl.value.trim()){
+      secondarySearchQuery = '';
+      secondarySearchResults = [];
+      renderSecondaryResults([], 0);
+      // Remove secondary-match class from all tiles
+      for(const [, tile] of tiles){
+        tile.classList.remove('secondary-match');
+      }
+      return;
+    }
+
+    secondarySearchQuery = secondaryQueryEl.value;
+
+    // Search using the API (normal search)
+    const body = {
+      query: secondarySearchQuery,
+      filters: currentAsOfMs ? { as_of_ms: currentAsOfMs } : {},
+      options: {
+        limit: 200,
+        context_lines: 2,
+        highlight: true,
+        fuzziness: secondaryFuzzyMode ? 'AUTO' : undefined,
+        partial: secondaryPartialMode,
+        show_deleted: deletedMode
+      }
+    };
+
+    const res = await fetchJSON('/search/simple', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify(body)
+    });
+
+    const allSecondaryResults = res.results || [];
+
+    // INTERSECTION: Filter secondary results to only include files from primary results
+    const primaryPaths = new Set(lastSearchResults.map(r => r.file_path));
+    const intersectionResults = allSecondaryResults.filter(r => primaryPaths.has(r.file_path));
+
+    secondarySearchResults = intersectionResults;
+
+    // Render secondary results panel
+    const matchCount = intersectionResults.reduce((sum, r) => sum + (r.matches ? r.matches.length : 0), 0);
+    renderSecondaryResults(intersectionResults, matchCount);
+
+    // Add visual highlighting to tiles matching both queries
+    const secondaryPaths = new Set(intersectionResults.map(r => r.file_path));
+
+    for(const [path, tile] of tiles){
+      if(secondaryPaths.has(path)){
+        tile.classList.add('secondary-match');
+      } else {
+        tile.classList.remove('secondary-match');
+      }
+    }
+  }
+
+  function renderSecondaryResults(results, matchCount){
+    const secondaryResultsEl = document.getElementById('secondaryResults');
+    if(!secondaryResultsEl) return;
+
+    secondaryResultsEl.innerHTML = '';
+
+    // Add result count
+    if(results.length > 0){
+      const countDiv = document.createElement('div');
+      countDiv.className = 'results-count';
+      countDiv.style.marginBottom = '12px';
+      countDiv.innerHTML = `
+        <div style="color: #39bae6; font-weight: 600;">
+          ${matchCount} matches in ${results.length} files
+        </div>
+        <div style="color: #888; font-size: 11px; margin-top: 4px;">
+          Primary: ${lastSearchResults.length} → Secondary: ${results.length}
+        </div>
+      `;
+      secondaryResultsEl.appendChild(countDiv);
+    } else if(secondarySearchQuery){
+      const emptyDiv = document.createElement('div');
+      emptyDiv.className = 'results-count';
+      emptyDiv.style.color = '#888';
+      emptyDiv.textContent = 'No matches in primary results';
+      secondaryResultsEl.appendChild(emptyDiv);
+      return;
+    } else {
+      const promptDiv = document.createElement('div');
+      promptDiv.className = 'results-count';
+      promptDiv.style.color = '#888';
+      promptDiv.innerHTML = `
+        <div style="margin-bottom: 8px;">🔍 <strong>Secondary Filter</strong></div>
+        <div style="font-size: 11px; line-height: 1.5;">
+          Enter a query to refine your primary search results.<br/><br/>
+          Files matching <em>both</em> queries will be highlighted with a golden glow ⭐
+        </div>
+      `;
+      secondaryResultsEl.appendChild(promptDiv);
+      return;
+    }
+
+    // Render results (similar to primary results)
+    results.forEach((r, idx)=>{
+      const grp = document.createElement('div');
+      grp.className = 'result-group';
+
+      // File header
+      const fileHeader = document.createElement('div');
+      fileHeader.className = 'result-file-header';
+
+      const file = document.createElement('div');
+      file.className = 'result-file';
+      file.textContent = r.file_path;
+      file.onclick = ()=> { focusResult(r); file.scrollIntoView({block:'nearest'}); };
+
+      // Add score badge
+      if(r.score_pct !== undefined){
+        const scoreBadge = document.createElement('span');
+        scoreBadge.className = 'score-badge';
+        scoreBadge.textContent = `${r.score_pct}%`;
+        scoreBadge.setAttribute('data-score', r.score_pct);
+        fileHeader.appendChild(file);
+        fileHeader.appendChild(scoreBadge);
+      } else {
+        fileHeader.appendChild(file);
+      }
+
+      // Matches
+      const ol = document.createElement('div');
+      ol.className = 'result-matches';
+      (r.matches||[]).forEach((m)=>{
+        const item = document.createElement('div');
+        item.className = 'result-match';
+        const ln = m.line ? `:${m.line}` : '';
+        const snippet = m.highlight || '';
+        item.innerHTML = `${ln}  ${snippet.slice(0,100)}`;
+        item.onclick = ()=> { focusLine(r.file_path, m.line, secondarySearchQuery); item.scrollIntoView({block:'nearest'}); };
+        ol.appendChild(item);
+      });
+
+      grp.appendChild(fileHeader);
+      grp.appendChild(ol);
+      secondaryResultsEl.appendChild(grp);
+
+      // Auto-focus first result
+      if(idx === 0) { focusResult(r); grp.scrollIntoView({block:'nearest'}); }
+    });
+  }
+  */
+  // END OF OLD SECONDARY FILTER FUNCTIONS
+
+  // ============================================================================
+  // MULTI-PANEL FILTER SYSTEM (New Implementation)
+  // ============================================================================
+
+  // Create and add a new filter panel
+  function addFilterPanel(){
+    if(filterPanels.length >= MAX_FILTER_PANELS){
+      showToast(`Maximum ${MAX_FILTER_PANELS} filter panels reached`);
+      return;
+    }
+
+    // Ensure we have primary results to filter
+    if(!lastSearchResults || lastSearchResults.length === 0){
+      showToast('Perform a primary search first');
+      return;
+    }
+
+    const panelId = nextFilterId++;
+    const panelNumber = filterPanels.length + 1;
+
+    // Create panel DOM element
+    const panel = document.createElement('div');
+    panel.className = 'filter-panel animating-in';
+    panel.setAttribute('data-panel-id', panelId);
+
+    // Header
+    const header = document.createElement('div');
+    header.className = 'filter-panel-header';
+    header.innerHTML = `
+      <h3>Filter ${panelNumber}</h3>
+      <button class="filter-panel-close" title="Remove filter">×</button>
+    `;
+
+    // Search input
+    const searchDiv = document.createElement('div');
+    searchDiv.className = 'filter-panel-search';
+    searchDiv.innerHTML = `
+      <input type="text" class="filter-panel-input" placeholder="Refine further..." />
+      <div class="filter-panel-options">
+        <button class="filter-option-btn" data-option="fuzzy" title="Fuzzy search">~</button>
+        <button class="filter-option-btn" data-option="partial" title="Partial match">*</button>
+      </div>
+    `;
+
+    // Results container
+    const resultsDiv = document.createElement('div');
+    resultsDiv.className = 'filter-panel-results';
+    resultsDiv.innerHTML = `
+      <div style="color: #888; font-size: 11px; padding: 8px;">
+        Enter a query to refine results further
+      </div>
+    `;
+
+    // Add nub for next panel
+    const nub = document.createElement('div');
+    nub.className = 'add-filter-nub';
+    nub.innerHTML = '<span>+</span>';
+    nub.title = 'Add another filter';
+
+    // Assemble panel
+    panel.appendChild(header);
+    panel.appendChild(searchDiv);
+    panel.appendChild(resultsDiv);
+    panel.appendChild(nub);
+
+    // Add panel state
+    const panelState = {
+      id: panelId,
+      element: panel,
+      query: '',
+      results: [], // Cumulative intersection results (for display)
+      rawResults: [], // Raw search results (for computing next panel's intersection)
+      fuzzyMode: false,
+      partialMode: false
+    };
+    filterPanels.push(panelState);
+
+    // Add to DOM
+    const container = document.getElementById('filterPanelsContainer');
+    container.appendChild(panel);
+
+    // Animate in
+    requestAnimationFrame(() => {
+      panel.classList.remove('animating-in');
+    });
+
+    // Event handlers
+    const closeBtn = panel.querySelector('.filter-panel-close');
+    const input = panel.querySelector('.filter-panel-input');
+    const fuzzyBtn = panel.querySelector('[data-option="fuzzy"]');
+    const partialBtn = panel.querySelector('[data-option="partial"]');
+
+    closeBtn.onclick = () => removeFilterPanel(panelId);
+    input.addEventListener('input', debounce(() => updateFilterPanel(panelId), 300));
+    input.addEventListener('keydown', (e) => {
+      if(e.key === 'Enter') updateFilterPanel(panelId);
+    });
+    fuzzyBtn.onclick = () => toggleFilterOption(panelId, 'fuzzy');
+    partialBtn.onclick = () => toggleFilterOption(panelId, 'partial');
+    nub.onclick = () => addFilterPanel();
+
+    // Update workspace positioning
+    updateWorkspacePosition();
+
+    showToast(`Filter ${panelNumber} added`);
+  }
+
+  // Remove a filter panel
+  function removeFilterPanel(panelId){
+    const index = filterPanels.findIndex(p => p.id === panelId);
+    if(index === -1) return;
+
+    const panel = filterPanels[index];
+    panel.element.remove();
+    filterPanels.splice(index, 1);
+
+    // Re-compute filtering with remaining panels
+    updateAllFilterHighlighting();
+    updateWorkspacePosition();
+
+    showToast('Filter panel removed');
+  }
+
+  // Update a specific filter panel's search
+  async function updateFilterPanel(panelId, skipHighlighting = false){
+    const panel = filterPanels.find(p => p.id === panelId);
+    if(!panel) return;
+
+    const input = panel.element.querySelector('.filter-panel-input');
+    const query = input.value.trim();
+    panel.query = query;
+
+    if(!query){
+      panel.results = [];
+      renderFilterPanelResults(panel);
+      if(!skipHighlighting) updateAllFilterHighlighting();
+      return;
+    }
+
+    // Search via API
+    const body = {
+      query: query,
+      filters: currentAsOfMs ? { as_of_ms: currentAsOfMs } : {},
+      options: {
+        limit: 200,
+        context_lines: 2,
+        highlight: true,
+        fuzziness: panel.fuzzyMode ? 'AUTO' : undefined,
+        partial: panel.partialMode,
+        show_deleted: deletedMode
+      }
+    };
+
+    try {
+      const res = await fetchJSON('/search/simple', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(body)
+      });
+
+      const allResults = res.results || [];
+
+      // CUMULATIVE INTERSECTION: Filter to include only files that match ALL previous filters
+      const panelIndex = filterPanels.findIndex(p => p.id === panelId);
+
+      // Start with primary results
+      let allowedPaths = new Set(lastSearchResults.map(r => r.file_path));
+
+      // Intersect with all previous filter panels
+      for(let i = 0; i < panelIndex; i++){
+        const prevPanel = filterPanels[i];
+        if(prevPanel.query && prevPanel.rawResults && prevPanel.rawResults.length > 0){
+          const prevPaths = new Set(prevPanel.rawResults.map(r => r.file_path));
+          allowedPaths = new Set([...allowedPaths].filter(p => prevPaths.has(p)));
+        }
+      }
+
+      // Now intersect with current panel's raw results
+      const currentPaths = new Set(allResults.map(r => r.file_path));
+      allowedPaths = new Set([...allowedPaths].filter(p => currentPaths.has(p)));
+
+      // Filter allResults to only include files in allowedPaths
+      const cumulativeResults = allResults.filter(r => allowedPaths.has(r.file_path));
+
+      panel.rawResults = allResults; // Store raw results for use by next panels
+      panel.results = cumulativeResults; // Store cumulative intersection for display
+      renderFilterPanelResults(panel);
+
+      // Update all subsequent panels (they need to recompute their intersections)
+      // panelIndex already declared above at line 803
+      for(let i = panelIndex + 1; i < filterPanels.length; i++){
+        const nextPanel = filterPanels[i];
+        if(nextPanel.query){
+          // Recompute this panel's displayed results based on new previous results
+          // Don't re-fetch from API, just recompute intersection
+          recomputeFilterPanelIntersection(nextPanel.id);
+        }
+      }
+
+      // Only update highlighting if not skipped (to avoid multiple calls)
+      if(!skipHighlighting) updateAllFilterHighlighting();
+    } catch(e){
+      console.error('Filter search error:', e);
+      showToast('Search failed');
+    }
+  }
+
+  // Recompute a panel's intersection without re-fetching from API
+  function recomputeFilterPanelIntersection(panelId){
+    const panel = filterPanels.find(p => p.id === panelId);
+    if(!panel || !panel.rawResults) return;
+
+    const panelIndex = filterPanels.findIndex(p => p.id === panelId);
+
+    // Start with primary results
+    let allowedPaths = new Set(lastSearchResults.map(r => r.file_path));
+
+    // Intersect with all previous filter panels
+    for(let i = 0; i < panelIndex; i++){
+      const prevPanel = filterPanels[i];
+      if(prevPanel.query && prevPanel.rawResults && prevPanel.rawResults.length > 0){
+        const prevPaths = new Set(prevPanel.rawResults.map(r => r.file_path));
+        allowedPaths = new Set([...allowedPaths].filter(p => prevPaths.has(p)));
+      }
+    }
+
+    // Intersect with current panel's raw results
+    const currentPaths = new Set(panel.rawResults.map(r => r.file_path));
+    allowedPaths = new Set([...allowedPaths].filter(p => currentPaths.has(p)));
+
+    // Filter rawResults to get cumulative intersection
+    const cumulativeResults = panel.rawResults.filter(r => allowedPaths.has(r.file_path));
+
+    panel.results = cumulativeResults;
+    renderFilterPanelResults(panel);
+  }
+
+  // Toggle filter option (fuzzy/partial)
+  async function toggleFilterOption(panelId, option){
+    const panel = filterPanels.find(p => p.id === panelId);
+    if(!panel) return;
+
+    if(option === 'fuzzy'){
+      panel.fuzzyMode = !panel.fuzzyMode;
+      const btn = panel.element.querySelector('[data-option="fuzzy"]');
+      btn.classList.toggle('active', panel.fuzzyMode);
+    } else if(option === 'partial'){
+      panel.partialMode = !panel.partialMode;
+      const btn = panel.element.querySelector('[data-option="partial"]');
+      btn.classList.toggle('active', panel.partialMode);
+    }
+
+    // Re-run search if query exists
+    if(panel.query){
+      await updateFilterPanel(panelId);
+    }
+  }
+
+  // Render results in a filter panel (same format as primary results)
+  function renderFilterPanelResults(panel){
+    const resultsDiv = panel.element.querySelector('.filter-panel-results');
+    resultsDiv.innerHTML = '';
+
+    const results = panel.results;
+
+    if(results.length === 0 && !panel.query){
+      resultsDiv.innerHTML = `
+        <div style="color: #888; font-size: 11px; padding: 8px;">
+          Enter a query to refine results further
+        </div>
+      `;
+      return;
+    }
+
+    if(results.length === 0){
+      resultsDiv.innerHTML = `
+        <div style="color: #888; font-size: 11px; padding: 8px;">
+          No matches in cumulative intersection
+        </div>
+      `;
+      return;
+    }
+
+    // Count display (same as primary)
+    const countDiv = document.createElement('div');
+    countDiv.className = 'results-count';
+    const fileCount = results.length;
+    const matchCount = results.reduce((sum, r) => sum + (r.matches ? r.matches.length : 0), 0);
+    countDiv.textContent = `${matchCount} matches in ${fileCount} files`;
+    resultsDiv.appendChild(countDiv);
+
+    // Results list: per-file group with per-match lines (same as primary)
+    results.forEach((r, idx) => {
+      const grp = document.createElement('div');
+      grp.className = 'result-group';
+
+      // File header with score badge
+      const fileHeader = document.createElement('div');
+      fileHeader.className = 'result-file-header';
+
+      const file = document.createElement('div');
+      file.className = 'result-file';
+      if(r.deleted) file.classList.add('deleted');
+      file.textContent = r.file_path;
+      file.onclick = () => { focusResult(r); file.scrollIntoView({block:'nearest'}); };
+
+      // Add deleted badge
+      if(r.deleted){
+        const deletedBadge = document.createElement('span');
+        deletedBadge.className = 'deleted-badge';
+        deletedBadge.textContent = 'DELETED';
+        fileHeader.appendChild(file);
+        fileHeader.appendChild(deletedBadge);
+      }
+
+      // Add score badge
+      if(r.score_pct !== undefined){
+        const scoreBadge = document.createElement('span');
+        scoreBadge.className = 'score-badge';
+        scoreBadge.textContent = `${r.score_pct}%`;
+        scoreBadge.setAttribute('data-score', r.score_pct);
+        fileHeader.appendChild(file);
+        fileHeader.appendChild(scoreBadge);
+      } else {
+        fileHeader.appendChild(file);
+      }
+
+      // Matches (line numbers + snippets)
+      const ol = document.createElement('div');
+      ol.className = 'result-matches';
+      (r.matches||[]).forEach((m) => {
+        const item = document.createElement('div');
+        item.className = 'result-match';
+        const ln = m.line ? `:${m.line}` : '';
+        const snippet = m.highlight || '';
+        // Use innerHTML to render <mark> tags for highlighting
+        item.innerHTML = `${ln}  ${snippet.slice(0,120)}`;
+        item.onclick = () => { focusLine(r.file_path, m.line, panel.query); item.scrollIntoView({block:'nearest'}); };
+        ol.appendChild(item);
+      });
+
+      grp.appendChild(fileHeader);
+      grp.appendChild(ol);
+      resultsDiv.appendChild(grp);
+
+      // DON'T auto-focus in filter panels - causes performance issues
+      // Only focus when user explicitly clicks
+      // if(idx === 0) { focusResult(r); grp.scrollIntoView({block:'nearest'}); }
+    });
+  }
+
+  // Compute cumulative intersection: ALL filters must match
+  function computeCumulativeIntersection(){
+    if(filterPanels.length === 0) return new Set();
+
+    // Start with primary results
+    let intersectionPaths = new Set(lastSearchResults.map(r => r.file_path));
+
+    // Intersect with each filter panel
+    for(const panel of filterPanels){
+      if(panel.query && panel.results.length > 0){
+        const panelPaths = new Set(panel.results.map(r => r.file_path));
+        // Keep only paths in both sets
+        intersectionPaths = new Set([...intersectionPaths].filter(p => panelPaths.has(p)));
+      }
+    }
+
+    return intersectionPaths;
+  }
+
+  // Update all tile highlighting based on active filters
+  function updateAllFilterHighlighting(){
+    const perfStart = performance.now();
+    console.log('✨ [updateAllFilterHighlighting] START', {
+      tiles: tiles.size,
+      filterPanels: filterPanels.length
+    });
+
+    // If no active filters, just clear highlighting and return
+    const activeFilters = filterPanels.filter(p => p.query && p.results.length > 0);
+    const matchCount = activeFilters.length + 1; // +1 for primary
+    const glowLevel = Math.min(matchCount, 5);
+
+    if(activeFilters.length === 0){
+      // Clear all highlighting in single pass
+      for(const [, tile] of tiles){
+        // Only remove if actually has highlighting (avoid unnecessary DOM ops)
+        if(tile.className.includes('filter-match')){
+          for(let i = 1; i <= 5; i++){
+            tile.classList.remove(`filter-match-${i}`);
+          }
+          const oldBadge = tile.querySelector('.filter-match-badge');
+          if(oldBadge) oldBadge.remove();
+        }
+      }
+      return;
+    }
+
+    // Compute intersection
+    const matchingPaths = computeCumulativeIntersection();
+
+    // SINGLE PASS: Update highlighting efficiently
+    for(const [path, tile] of tiles){
+      const shouldHighlight = matchingPaths.has(path);
+      const hasHighlighting = tile.className.includes('filter-match');
+
+      if(shouldHighlight && !hasHighlighting){
+        // Add highlighting (tile wasn't highlighted before)
+        tile.classList.add(`filter-match-${glowLevel}`);
+        const badge = document.createElement('div');
+        badge.className = 'filter-match-badge';
+        badge.textContent = `×${matchCount}`;
+        tile.appendChild(badge);
+      } else if(shouldHighlight && hasHighlighting){
+        // Update existing highlighting (level might have changed)
+        // Remove old level, add new level
+        for(let i = 1; i <= 5; i++){
+          if(i !== glowLevel) tile.classList.remove(`filter-match-${i}`);
+        }
+        tile.classList.add(`filter-match-${glowLevel}`);
+        // Update badge text
+        const badge = tile.querySelector('.filter-match-badge');
+        if(badge) badge.textContent = `×${matchCount}`;
+      } else if(!shouldHighlight && hasHighlighting){
+        // Remove highlighting (tile was highlighted but isn't anymore)
+        for(let i = 1; i <= 5; i++){
+          tile.classList.remove(`filter-match-${i}`);
+        }
+        const oldBadge = tile.querySelector('.filter-match-badge');
+        if(oldBadge) oldBadge.remove();
+      }
+      // else: !shouldHighlight && !hasHighlighting - no action needed
+    }
+
+    const perfEnd = performance.now();
+    console.log('✅ [updateAllFilterHighlighting] END', {
+      duration: `${(perfEnd - perfStart).toFixed(2)}ms`,
+      activeFilters: activeFilters.length
+    });
+  }
+
+  // Update workspace left position based on number of panels
+  function updateWorkspacePosition(){
+    const workspace = document.getElementById('workspace');
+    const panelCount = filterPanels.length;
+    const baseLeft = 320; // Primary sidebar width
+    const panelWidth = 300;
+    const totalLeft = baseLeft + (panelCount * panelWidth);
+
+    workspace.style.left = `${totalLeft}px`;
+  }
+
+  // ============================================================================
+  // END OF MULTI-PANEL FILTER SYSTEM
+  // ============================================================================
 
   function getTimeAgo(timestamp){
     const now = Date.now();
@@ -957,10 +1743,40 @@
   }
 
   async function loadTileContent(path, initData, focusLine = null, searchQuery = null){
+    const perfStart = performance.now();
+    const hadContent = tileContent.has(path);
+    const inCache = preloadCache.has(path);
+    console.log('📄 [loadTileContent] START', {
+      path: path.substring(path.lastIndexOf('/') + 1), // Just filename for brevity
+      hadContent,
+      inCache,
+      focusLine,
+      hasQuery: !!searchQuery
+    });
+
     let tile = tiles.get(path);
     if(!tile){ await openTile(path); tile = tiles.get(path); }
-    const data = initData || await fetchJSON('/file?path=' + encodeURIComponent(path));
+
+    // Check preload cache first (instant if available)
+    let data;
+    if(initData){
+      data = initData;
+    } else if(preloadCache.has(path)){
+      data = preloadCache.get(path);
+      console.log('⚡ [loadTileContent] Using cached data (instant!)');
+    } else {
+      data = await fetchJSON('/file?path=' + encodeURIComponent(path));
+    }
+
     const body = tile.querySelector('.body');
+
+    // CRITICAL: Check if body already has children before clearing
+    const oldChildCount = body.children.length;
+    if(oldChildCount > 0){
+      console.warn('⚠️  [loadTileContent] Body already has content, clearing', {
+        oldChildren: oldChildCount
+      });
+    }
 
     // Update language in title and apply color
     try{ tile.querySelector('.title .lang').textContent = data.language || ''; }catch(e){}
@@ -974,7 +1790,22 @@
     // Use Prism for syntax highlighting (lightweight, supports 1000s of instances)
     const content = data.content || '';
     const prismLang = languageToPrism(data.language);
-    const lines = content.split('\n');
+
+    // PERFORMANCE FIX: Limit line length to prevent loading giant minified files
+    // Files with no line breaks (minified JS, compiled code) can be megabytes on one line
+    const MAX_LINE_LENGTH = 10000; // 10k chars per line max (generous but safe)
+    const rawLines = content.split('\n');
+    let truncatedCount = 0;
+    const lines = rawLines.map(line => {
+      if(line.length > MAX_LINE_LENGTH){
+        truncatedCount++;
+        return line.substring(0, MAX_LINE_LENGTH) + ' ...[line truncated, ' + (line.length - MAX_LINE_LENGTH) + ' more chars]';
+      }
+      return line;
+    });
+    if(truncatedCount > 0){
+      console.warn(`⚠️  [loadTileContent] Truncated ${truncatedCount} long lines in ${path.substring(path.lastIndexOf('/') + 1)}`);
+    }
     const totalLines = lines.length;
 
     // CHUNKED RENDERING: Calculate chunk size based on tile height and dynamic font size
@@ -1053,14 +1884,18 @@
       body.appendChild(indicator);
     }
 
-    // Highlight with Prism and enable line numbers
-    if(typeof Prism !== 'undefined'){
-      try{
-        Prism.highlightElement(code);
-      }catch(e){
-        // Prism not available or language not loaded
-      }
-    }
+    // PERFORMANCE FIX: Disable Prism highlighting (causing 250ms+ hangs via autoloader)
+    // Prism autoloader loads language definitions dynamically which accumulates state
+    // After ~13 different file types, it causes browser to freeze
+    // TODO: Replace with lighter highlighting or manual language loading
+    // if(typeof Prism !== 'undefined'){
+    //   try{
+    //     Prism.highlightElement(code);
+    //   }catch(e){
+    //     // Prism not available or language not loaded
+    //   }
+    // }
+    console.log('⚠️  Prism highlighting disabled for performance');
 
     // Highlight search terms if provided
     if(searchQuery && searchQuery.trim()){
@@ -1076,9 +1911,23 @@
     }
 
     setupTileButtons(path);
+
+    const perfEnd = performance.now();
+    console.log('✅ [loadTileContent] END', {
+      path: path.substring(path.lastIndexOf('/') + 1),
+      duration: `${(perfEnd - perfStart).toFixed(2)}ms`,
+      source: inCache ? 'cache' : 'network',
+      bodyChildren: body.children.length,
+      linesRendered: chunkLineCount,
+      totalLines: totalLines,
+      truncated: truncatedCount > 0
+    });
   }
 
   function highlightSearchTerms(element, query){
+    const perfStart = performance.now();
+    console.log('🔍 [highlightSearchTerms] START', { query });
+
     // Escape regex special characters
     const escapedQuery = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const regex = new RegExp(escapedQuery, 'gi');
@@ -1093,8 +1942,10 @@
 
     const nodesToReplace = [];
     let node;
+    let nodesWalked = 0;
 
     while(node = walker.nextNode()){
+      nodesWalked++;
       const text = node.textContent;
       if(regex.test(text)){
         nodesToReplace.push(node);
@@ -1132,6 +1983,13 @@
       }
 
       textNode.parentNode.replaceChild(fragment, textNode);
+    });
+
+    const perfEnd = performance.now();
+    console.log('✅ [highlightSearchTerms] END', {
+      duration: `${(perfEnd - perfStart).toFixed(2)}ms`,
+      nodesWalked,
+      nodesReplaced: nodesToReplace.length
     });
   }
 
@@ -1922,6 +2780,112 @@
     };
   }
 
+  // Add Filter Nub handler
+  const addFilterNub = document.getElementById('addFilterNub');
+  if(addFilterNub){
+    addFilterNub.onclick = () => addFilterPanel();
+  }
+
+  // DISABLED: Old secondary filter toggle (replaced with multi-panel system)
+  /*
+  const secondaryFilterBtn = document.getElementById('secondaryFilter');
+  const secondarySidebar = document.getElementById('secondarySidebar');
+  const secondaryQueryInput = document.getElementById('secondaryQuery');
+  const secondaryCloseBtn = document.getElementById('secondaryClose');
+  const secondaryFuzzyBtn = document.getElementById('secondaryFuzzyToggle');
+  const secondaryPartialBtn = document.getElementById('secondaryPartialToggle');
+  const clearSecondaryBtn = document.getElementById('clearSecondarySearch');
+
+  if(secondaryFilterBtn && secondarySidebar){
+    secondaryFilterBtn.onclick = ()=>{
+      secondaryFilterEnabled = !secondaryFilterEnabled;
+      secondaryFilterBtn.classList.toggle('active', secondaryFilterEnabled);
+
+      if(secondaryFilterEnabled){
+        // Show secondary sidebar
+        secondarySidebar.classList.remove('collapsed');
+        document.body.classList.add('secondary-filter-active');
+        showToast('Secondary Filter enabled - refine your search results');
+        // Render initial prompt
+        renderSecondaryResults([], 0);
+      } else {
+        // Hide secondary sidebar
+        secondarySidebar.classList.add('collapsed');
+        document.body.classList.remove('secondary-filter-active');
+        showToast('Secondary Filter disabled');
+        // Clear secondary search and highlighting
+        if(secondaryQueryInput) secondaryQueryInput.value = '';
+        secondarySearchQuery = '';
+        secondarySearchResults = [];
+        for(const [, tile] of tiles){
+          tile.classList.remove('secondary-match');
+        }
+      }
+    };
+  }
+
+  // Secondary search input handler
+  if(secondaryQueryInput){
+    secondaryQueryInput.addEventListener('input', debounce(async ()=>{
+      await doSecondarySearch();
+    }, 300));
+
+    secondaryQueryInput.addEventListener('keydown', async (e)=>{
+      if(e.key === 'Enter'){
+        await doSecondarySearch();
+      }
+    });
+  }
+
+  // Secondary close button
+  if(secondaryCloseBtn){
+    secondaryCloseBtn.onclick = ()=>{
+      secondaryFilterEnabled = false;
+      if(secondaryFilterBtn) secondaryFilterBtn.classList.remove('active');
+      if(secondarySidebar) secondarySidebar.classList.add('collapsed');
+      document.body.classList.remove('secondary-filter-active');
+      showToast('Secondary Filter closed');
+      // Clear highlighting
+      for(const [, tile] of tiles){
+        tile.classList.remove('secondary-match');
+      }
+    };
+  }
+
+  // Secondary fuzzy toggle
+  if(secondaryFuzzyBtn){
+    secondaryFuzzyBtn.onclick = async ()=>{
+      secondaryFuzzyMode = !secondaryFuzzyMode;
+      secondaryFuzzyBtn.classList.toggle('active', secondaryFuzzyMode);
+      if(secondaryQueryInput && secondaryQueryInput.value.trim()){
+        await doSecondarySearch();
+      }
+    };
+  }
+
+  // Secondary partial toggle
+  if(secondaryPartialBtn){
+    secondaryPartialBtn.onclick = async ()=>{
+      secondaryPartialMode = !secondaryPartialMode;
+      secondaryPartialBtn.classList.toggle('active', secondaryPartialMode);
+      if(secondaryQueryInput && secondaryQueryInput.value.trim()){
+        await doSecondarySearch();
+      }
+    };
+  }
+
+  // Clear secondary search
+  if(clearSecondaryBtn){
+    clearSecondaryBtn.onclick = async ()=>{
+      if(secondaryQueryInput) secondaryQueryInput.value = '';
+      secondarySearchQuery = '';
+      secondarySearchResults = [];
+      await doSecondarySearch();
+    };
+  }
+  */
+  // END OF OLD SECONDARY FILTER EVENT HANDLERS
+
   // Follow CLI toggle
   followCliBtn.onclick = ()=>{
     followCliMode = !followCliMode;
@@ -2133,11 +3097,11 @@
           console.log('[beads DEBUG] CLI project_root changed from', currentProjectRoot, 'to', payload.project_root);
           currentProjectRoot = payload.project_root;
           projectJustChanged = true;
-          // Refresh beads tickets for the new project
-          if(beadsAvailable){
-            console.log('[beads DEBUG] Refreshing beads tickets for new project');
-            refreshBeadsTickets();
-          }
+          // DISABLED: Beads integration
+          // if(beadsAvailable){
+          //   console.log('[beads DEBUG] Refreshing beads tickets for new project');
+          //   refreshBeadsTickets();
+          // }
           // Refresh file list and layout for the new project (in follow mode only)
           if(followCliMode){
             console.log('[follow mode] Refreshing tiles for new project');
@@ -2416,6 +3380,13 @@
   }
 
   async function refreshAllTiles(ts){
+    const perfStart = performance.now();
+    console.log('🔄 [refreshAllTiles] START', {
+      timestamp: ts,
+      existingTiles: tiles.size,
+      existingFolders: folders.size
+    });
+
     // Determine target file set with metadata
     let list = [];
     let filesWithMeta = [];
@@ -2465,11 +3436,30 @@
     }
 
     // Rebuild canvas & tiles for new file set
+    // PERFORMANCE: Batch DOM operations to avoid layout thrashing
+    // Temporarily hide canvas to prevent reflows during bulk removal
+    canvas.style.display = 'none';
+
+    // CRITICAL: Check if tiles are accumulating in DOM before removal
+    const domChildrenBefore = canvas.children.length;
+    console.log('🗑️  [refreshAllTiles] Removing tiles', {
+      mapSize: tiles.size,
+      domChildren: domChildrenBefore
+    });
+
     // Remove existing tiles
     for(const [p, tile] of tiles){ tile.remove(); }
-
     tiles.clear(); tileContent.clear(); filePos.clear(); fileFolder.clear(); fileLanguages.clear();
+
     for(const [, el] of folders){ el.remove(); } folders.clear();
+
+    // CRITICAL: Verify tiles were actually removed from DOM
+    const domChildrenAfter = canvas.children.length;
+    console.log('✅ [refreshAllTiles] Tiles removed', {
+      domChildrenBefore,
+      domChildrenAfter,
+      leaked: domChildrenAfter > 0 ? domChildrenAfter : 0
+    });
 
     // Use treemap (flat or with folders), simple grid (results-only), or traditional layout based on mode
     if(treemapMode && treemapFoldersMode){
@@ -2485,31 +3475,34 @@
       const tree = buildTree(list);
       layoutAndRender(tree);
     }
-    // Spawn and load tiles with Prism (lightweight, can handle 1000s)
-    const concurrency = 10;
-    let i = 0;
-    async function next(){
-      if(i >= list.length) return;
-      const p = list[i++];
+    // PERFORMANCE FIX: Create placeholder tiles immediately (no content loading)
+    // Content will be lazy-loaded on-demand when user clicks a tile
+    for(const p of list){
       try{
-        await openTile(p);
-        if(ts == null){
-          const data = await fetchJSON(`/file?path=${encodeURIComponent(p)}`);
-          await loadTileContent(p, data);
-        } else {
-          const data = await fetchJSON(`/file/at?path=${encodeURIComponent(p)}&ts=${ts}`);
-          await loadTileContent(p, data);
-        }
+        // Create empty tile immediately (synchronous, no network calls)
+        openTile(p);
       }catch(e){ /* ignore */ }
-      await next();
     }
-    const workers = [];
-    for(let k = 0; k < concurrency; k++) workers.push(next());
-    await Promise.all(workers);
+
+    // Show canvas again after all tiles created (batch DOM update complete)
+    canvas.style.display = 'block';
 
     // Apply folder colors and update language bar
-    applyAllFolderColors();
+    // PERFORMANCE: Skip folder colors in results-only mode (no folders in simple grid layout)
+    if(!resultsOnlyMode || treemapMode){
+      applyAllFolderColors();
+    }
     updateLanguageBar();
+
+    // Content loading is now lazy - happens in openTile() when user interacts
+
+    const perfEnd = performance.now();
+    console.log('✅ [refreshAllTiles] END', {
+      duration: `${(perfEnd - perfStart).toFixed(2)}ms`,
+      tilesCreated: tiles.size,
+      foldersCreated: folders.size,
+      filesInList: list.length
+    });
   }
 
   function flashTile(path, kind='focus'){
@@ -2527,6 +3520,19 @@
   }
 
   function centerOnTile(path, opts={}){
+    console.log('🎬 [centerOnTile] START', { path, isAnimating, animHandle, animId: currentAnimationId });
+
+    // CRITICAL FIX: Stop ALL pending animations and increment ID to invalidate callbacks
+    currentAnimationId++; // Invalidate all old animation callbacks
+    if(isAnimating){
+      console.warn('⚠️  Canceling existing animation');
+      isAnimating = false; // Stop all animation loops
+    }
+    if(animHandle){
+      cancelAnimationFrame(animHandle);
+      animHandle = null;
+    }
+
     const tile = tiles.get(path);
     if(!tile) return;
     const ws = workspace.getBoundingClientRect();
@@ -2565,6 +3571,10 @@
   }
 
   function animatePanZoomCinematic(cx, cy, finalOffsetX, finalOffsetY, finalScale){
+    // CRITICAL: Capture animation ID to prevent old callbacks from executing
+    const myAnimationId = currentAnimationId;
+    console.log('🎬 [animatePanZoomCinematic] Starting 3-stage animation', { animId: myAnimationId });
+
     // Stage 1: Zoom out to wide view
     const pullbackScale = Math.max(0.3, scale * 0.4); // Zoom out to 40% of current (min 0.3)
 
@@ -2585,8 +3595,18 @@
 
     // Stage 1: Zoom out (200ms) - keep current center
     animatePanZoom(pullbackOffsetX, pullbackOffsetY, pullbackScale, 200, () => {
+      // CRITICAL: Check if this animation was cancelled
+      if(currentAnimationId !== myAnimationId){
+        console.warn('⚠️  Stage 1 callback cancelled (new animation started)');
+        return;
+      }
       // Stage 2: Pan to target (300ms) - stay at pullback scale, pan to new center
       animatePanZoom(targetOffsetXAtPullback, targetOffsetYAtPullback, pullbackScale, 300, () => {
+        // CRITICAL: Check if this animation was cancelled
+        if(currentAnimationId !== myAnimationId){
+          console.warn('⚠️  Stage 2 callback cancelled (new animation started)');
+          return;
+        }
         // Stage 3: Zoom in (250ms) - target already centered, just change scale
         // finalOffsetX/Y were calculated for finalScale, so they'll keep (cx,cy) centered
         animatePanZoom(finalOffsetX, finalOffsetY, finalScale, 250);
@@ -2595,12 +3615,19 @@
   }
 
   function animatePanZoom(toX, toY, toScale, duration=500, onComplete=null){
+    activeAnimationCount++;
+    console.log('▶️  [animatePanZoom] START', { activeCount: activeAnimationCount, duration });
+
     const fromX = offsetX, fromY = offsetY, fromS = scale;
     const start = performance.now();
     isAnimating = true;
     function ease(t){ return t<0.5 ? 2*t*t : -1+(4-2*t)*t; } // easeInOutQuad
     function step(now){
-      if(!isAnimating){ return; }
+      if(!isAnimating){
+        activeAnimationCount--;
+        console.log('⏹️  [animatePanZoom] STOPPED (isAnimating=false)', { activeCount: activeAnimationCount });
+        return;
+      }
       const t = Math.min(1, (now - start) / duration);
       const e = ease(t);
       offsetX = fromX + (toX - fromX) * e;
@@ -2611,6 +3638,8 @@
         animHandle = requestAnimationFrame(step);
       } else {
         isAnimating = false;
+        activeAnimationCount--;
+        console.log('✅ [animatePanZoom] COMPLETE', { activeCount: activeAnimationCount });
         if(onComplete) onComplete();
       }
     }
@@ -2691,6 +3720,13 @@
   }
 
   function focusResult(r){
+    console.log('👆 [focusResult] CLICK', {
+      path: r.file_path,
+      hasContent: tileContent.has(r.file_path),
+      totalTiles: tiles.size,
+      totalContent: tileContent.size
+    });
+
     const path = r.file_path;
     const line = (r.matches && r.matches[0] && r.matches[0].line) || null;
     const query = qEl.value.trim(); // Get current search query
@@ -2813,21 +3849,14 @@
         const tree = buildTree(list.map(f=>f.file_path));
         layoutAndRender(tree);
       }
-      // Spawn and load tiles with Prism (lightweight, can handle 1000s)
-      const concurrency = 10;
-      let i = 0;
-      async function next(){
-        if(i >= list.length) return;
-        const f = list[i++];
+      // PERFORMANCE FIX: Create placeholder tiles immediately (no content loading)
+      // Content will be lazy-loaded on-demand when user clicks a tile (same as Results Only mode)
+      for(const f of list){
         try{
-          await openTile(f.file_path);
-          await loadTileContent(f.file_path);
+          // Create empty tile immediately (synchronous, no network calls)
+          openTile(f.file_path);
         }catch(e){ /* ignore */ }
-        await next();
       }
-      const workers = [];
-      for(let k = 0; k < concurrency; k++) workers.push(next());
-      await Promise.all(workers);
 
       // Apply folder colors and update language bar
       applyAllFolderColors();
@@ -2835,7 +3864,8 @@
     }catch(e){ /* ignore */ }
   }
 
-  // Beads integration
+  // DISABLED: Beads integration (all functions commented out)
+  /*
   async function checkBeadsAvailable(){
     try{
       const res = await fetchJSON('/beads/check');
@@ -3022,5 +4052,11 @@
     }, 10000);
   }
   startBeadsPolling();
+  */
+  // END OF DISABLED BEADS INTEGRATION
+
+  // Start performance monitoring
+  console.log('🚀 [APP] Initializing performance monitoring');
+  setTimeout(startMemoryMonitoring, 1000);
 
 })();

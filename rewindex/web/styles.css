@@ -63,15 +63,202 @@ body {
   box-sizing: border-box;
 }
 
+/* Add Filter Nub - Tab that sticks out from sidebar */
+.add-filter-nub {
+  position: absolute;
+  right: -28px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 28px;
+  height: 60px;
+  background: rgba(57, 186, 230, 0.2);
+  border: 1px solid rgba(57, 186, 230, 0.3);
+  border-left: none;
+  border-radius: 0 8px 8px 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  z-index: 101;
+  transition: all 0.2s ease;
+  user-select: none;
+}
+
+.add-filter-nub span {
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--accent);
+  line-height: 1;
+}
+
+.add-filter-nub:hover {
+  background: rgba(57, 186, 230, 0.3);
+  right: -32px;
+  width: 32px;
+  box-shadow: 0 0 12px rgba(57, 186, 230, 0.4);
+}
+
+/* Filter Panels Container - holds dynamically created filter panels */
+#filterPanelsContainer {
+  position: fixed;
+  left: 320px; /* After primary sidebar */
+  top: 0;
+  bottom: 0;
+  z-index: 98;
+  display: flex;
+  flex-direction: row;
+  pointer-events: none; /* Allow panels to handle their own events */
+}
+
+/* Individual Filter Panel (dynamically created) */
+.filter-panel {
+  position: relative;
+  width: 300px;
+  height: 100%;
+  background: #13172199;
+  backdrop-filter: blur(8px);
+  border-right: 1px solid var(--border);
+  padding: 16px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  pointer-events: all;
+  transition: opacity 0.3s ease, transform 0.3s ease;
+}
+
+.filter-panel.animating-in {
+  opacity: 0;
+  transform: translateX(-20px);
+}
+
+.filter-panel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.filter-panel-header h3 {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+.filter-panel-close {
+  background: none;
+  border: none;
+  color: var(--muted);
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0;
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s ease;
+}
+
+.filter-panel-close:hover {
+  color: #ff6b6b;
+  transform: scale(1.2);
+}
+
+.filter-panel-search {
+  margin-bottom: 12px;
+}
+
+.filter-panel-input {
+  width: 100%;
+  padding: 8px 10px;
+  font-size: 13px;
+  font-family: 'Fira Code', monospace;
+  color: var(--text);
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  outline: none;
+  box-sizing: border-box;
+  transition: all 0.2s ease;
+}
+
+.filter-panel-input:focus {
+  border-color: var(--accent);
+  background: rgba(0, 0, 0, 0.4);
+}
+
+.filter-panel-input::placeholder {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.filter-panel-options {
+  display: flex;
+  gap: 4px;
+  margin-top: 6px;
+}
+
+.filter-option-btn {
+  padding: 4px 10px;
+  font-size: 12px;
+  font-family: 'Fira Code', monospace;
+  color: var(--muted);
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.filter-option-btn:hover {
+  color: var(--text);
+  background: rgba(0, 0, 0, 0.4);
+  border-color: var(--accent);
+}
+
+.filter-option-btn.active {
+  color: var(--accent);
+  background: rgba(57, 186, 230, 0.15);
+  border-color: var(--accent);
+}
+
+.filter-panel-results {
+  flex: 1;
+  overflow-y: auto;
+  margin-top: 8px;
+  font-size: 12px;
+}
+
+/* Each filter panel gets its own nub for adding more panels */
+.filter-panel .add-filter-nub {
+  right: -28px;
+  background: rgba(57, 186, 230, 0.15);
+  border-color: rgba(57, 186, 230, 0.25);
+}
+
+.filter-panel .add-filter-nub:hover {
+  background: rgba(57, 186, 230, 0.25);
+  right: -32px;
+}
+
 #workspace {
   position: absolute;
-  left: 0px;
+  left: 320px; /* Start after primary sidebar */
   right: 0;
   top: 0;
   bottom: 0;
   overflow: hidden;
   z-index: 0;
   background: var(--bg);
+  transition: left 0.3s ease;
 }
 
 .search-container {
@@ -937,6 +1124,73 @@ body {
   }
 }
 
+/* Multi-Filter Match Badge */
+.tile .filter-match-badge {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  padding: 3px 8px;
+  background: rgba(255, 215, 0, 0.9);
+  color: #000;
+  font-size: 11px;
+  font-weight: 700;
+  font-family: 'Fira Code', monospace;
+  border-radius: 12px;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  box-shadow: 0 2px 8px rgba(255, 215, 0, 0.5);
+  animation: badge-pulse 2s ease-in-out infinite;
+}
+
+.tile .filter-match-badge::before {
+  content: '⭐';
+  font-size: 12px;
+}
+
+@keyframes badge-pulse {
+  0%, 100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(1.05);
+    opacity: 0.9;
+  }
+}
+
+/* Visual highlighting for tiles matching multiple filters */
+.tile.filter-match-1 {
+  box-shadow: 0 0 15px rgba(255, 215, 0, 0.4),
+              0 0 30px rgba(255, 215, 0, 0.2);
+  border-color: rgba(255, 215, 0, 0.6);
+}
+
+.tile.filter-match-2 {
+  box-shadow: 0 0 20px rgba(255, 215, 0, 0.5),
+              0 0 40px rgba(255, 215, 0, 0.3);
+  border-color: rgba(255, 215, 0, 0.7);
+}
+
+.tile.filter-match-3 {
+  box-shadow: 0 0 25px rgba(255, 215, 0, 0.6),
+              0 0 50px rgba(255, 215, 0, 0.4);
+  border-color: rgba(255, 215, 0, 0.8);
+}
+
+.tile.filter-match-4 {
+  box-shadow: 0 0 30px rgba(255, 215, 0, 0.7),
+              0 0 60px rgba(255, 215, 0, 0.5);
+  border-color: rgba(255, 215, 0, 0.9);
+}
+
+.tile.filter-match-5 {
+  box-shadow: 0 0 35px rgba(255, 215, 0, 0.8),
+              0 0 70px rgba(255, 215, 0, 0.6);
+  border-color: rgba(255, 215, 0, 1.0);
+}
+
 .tile .title {
   padding: 8px;
   background: #0f1419;
@@ -1462,4 +1716,183 @@ body {
   background: rgba(57, 186, 230, 0.3);
   padding-right: 16px;
   transform: translateX(-4px);
+}
+
+/* Secondary Filter Panel (right side) */
+.secondary-sidebar {
+  position: fixed;
+  right: 0;
+  top: 0;
+  bottom: 80px; /* Leave room for timeline */
+  width: 340px;
+  background: #13172199;
+  backdrop-filter: blur(8px);
+  border-left: 1px solid var(--border);
+  padding: 16px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  z-index: 95; /* Below beads panel */
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  transition: transform 0.3s ease;
+}
+
+.secondary-sidebar.collapsed {
+  transform: translateX(100%);
+}
+
+.secondary-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.secondary-header h3 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--accent);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+.secondary-close-btn {
+  background: none;
+  border: none;
+  color: var(--muted);
+  font-size: 24px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0;
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s ease;
+}
+
+.secondary-close-btn:hover {
+  color: var(--text);
+  transform: scale(1.2);
+}
+
+.secondary-search-container {
+  margin-bottom: 16px;
+}
+
+.secondary-search-input {
+  width: 100%;
+  padding: 10px 12px;
+  font-size: 14px;
+  font-family: 'Fira Code', monospace;
+  color: var(--text);
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  outline: none;
+  box-sizing: border-box;
+  transition: all 0.2s ease;
+}
+
+.secondary-search-input:focus {
+  border-color: var(--accent);
+  background: rgba(0, 0, 0, 0.4);
+}
+
+.secondary-search-input::placeholder {
+  color: var(--muted);
+}
+
+.secondary-search-options {
+  display: flex;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.search-option-btn {
+  padding: 6px 12px;
+  font-size: 14px;
+  font-family: 'Fira Code', monospace;
+  color: var(--muted);
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.search-option-btn:hover {
+  color: var(--text);
+  background: rgba(0, 0, 0, 0.4);
+  border-color: var(--accent);
+}
+
+.search-option-btn.active {
+  color: var(--accent);
+  background: rgba(57, 186, 230, 0.15);
+  border-color: var(--accent);
+}
+
+.secondary-results-section {
+  flex: 1;
+  overflow-y: auto;
+  margin-top: 8px;
+}
+
+#secondaryResults {
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+/* Visual highlighting for tiles matching secondary filter */
+.tile.secondary-match {
+  box-shadow: 0 0 25px rgba(255, 215, 0, 0.6),
+              0 0 50px rgba(255, 215, 0, 0.3);
+  border: 2px solid rgba(255, 215, 0, 0.8);
+  z-index: 50;
+  position: relative;
+}
+
+.tile.secondary-match::before {
+  content: '⭐';
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  font-size: 18px;
+  z-index: 1;
+  filter: drop-shadow(0 0 4px rgba(255, 215, 0, 0.8));
+  animation: pulse-glow 2s ease-in-out infinite;
+}
+
+@keyframes pulse-glow {
+  0%, 100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.7;
+    transform: scale(1.1);
+  }
+}
+
+/* Adjust workspace when secondary sidebar is visible */
+body.secondary-filter-active #workspace {
+  right: 340px;
+  transition: right 0.3s ease;
+}
+
+/* Push beads panel when secondary is open */
+body.secondary-filter-active #beadsPanel {
+  right: 340px;
+  transition: right 0.3s ease;
+}
+
+body.secondary-filter-active .beads-panel-tab {
+  right: 340px;
+  transition: right 0.3s ease;
 }
