@@ -1884,18 +1884,22 @@
       body.appendChild(indicator);
     }
 
-    // PERFORMANCE FIX: Disable Prism highlighting (causing 250ms+ hangs via autoloader)
-    // Prism autoloader loads language definitions dynamically which accumulates state
-    // After ~13 different file types, it causes browser to freeze
-    // TODO: Replace with lighter highlighting or manual language loading
-    // if(typeof Prism !== 'undefined'){
-    //   try{
-    //     Prism.highlightElement(code);
-    //   }catch(e){
-    //     // Prism not available or language not loaded
-    //   }
-    // }
-    console.log('⚠️  Prism highlighting disabled for performance');
+    // Syntax highlighting with Prism (with performance monitoring)
+    const prismStart = performance.now();
+    let prismRan = false;
+    if(typeof Prism !== 'undefined'){
+      try{
+        Prism.highlightElement(code);
+        prismRan = true;
+        const prismEnd = performance.now();
+        const prismDuration = prismEnd - prismStart;
+        if(prismDuration > 50){
+          console.warn(`⚠️  [Prism] Slow highlighting: ${prismDuration.toFixed(2)}ms for ${path.substring(path.lastIndexOf('/') + 1)}`);
+        }
+      }catch(e){
+        console.warn('[Prism] Highlighting failed:', e.message);
+      }
+    }
 
     // Highlight search terms if provided
     if(searchQuery && searchQuery.trim()){
@@ -1913,14 +1917,16 @@
     setupTileButtons(path);
 
     const perfEnd = performance.now();
+    const totalDuration = perfEnd - perfStart;
     console.log('✅ [loadTileContent] END', {
       path: path.substring(path.lastIndexOf('/') + 1),
-      duration: `${(perfEnd - perfStart).toFixed(2)}ms`,
+      duration: `${totalDuration.toFixed(2)}ms`,
       source: inCache ? 'cache' : 'network',
       bodyChildren: body.children.length,
       linesRendered: chunkLineCount,
       totalLines: totalLines,
-      truncated: truncatedCount > 0
+      truncated: truncatedCount > 0,
+      prism: prismRan
     });
   }
 
