@@ -16,6 +16,7 @@
   const followCliBtn = document.getElementById('followCli');
   const followUpdatesBtn = document.getElementById('followUpdates');
   const dynTextBtn = document.getElementById('dynText');
+  const systemThemeToggleBtn = document.getElementById('systemThemeToggle');
   const startWatch = document.getElementById('startWatch');
   const stopWatch = document.getElementById('stopWatch');
   const languageBarEl = document.getElementById('languageBar');
@@ -67,6 +68,7 @@
   let dynTextMode = true; // Default ON for dynamic text sizing
   let resultsOnlyMode = !showAllParam; // Default TRUE (results only), unless URL param says otherwise
   let lastSearchResults = []; // Store last search results for results-only mode
+  let currentLanguageFilter = null; // Currently active language filter (e.g., "python", "javascript")
   let languageColors = {}; // Map of language -> color
   let languageList = []; // Ordered list of discovered languages
   let recentUpdates = []; // Track recent file updates [{path, action, timestamp}]
@@ -115,7 +117,7 @@
         currentAnimId: currentAnimationId,
         preloadCacheSize: preloadCache.size
       });
-    }, 5000); // Every 5 seconds
+    }, 50000); // Every 50 seconds
   }
 
   // Background file content preloader (non-blocking)
@@ -550,7 +552,7 @@
       const fileCount = groupedResults.length;
       const matchCount = groupedResults.reduce((sum, g) => sum + g.totalMatches, 0);
       const resultSetCount = results.length;
-      const modeInfo = resultsOnlyMode ? ' (Results Only mode)' : '';
+      const modeInfo = resultsOnlyMode ? ' ' : '';
 
       if(resultSetCount > fileCount){
         countDiv.textContent = `${matchCount} matches in ${fileCount} files (${resultSetCount} result sets)${modeInfo}`;
@@ -1008,7 +1010,7 @@
     // Add nub for next panel
     const nub = document.createElement('div');
     nub.className = 'add-filter-nub';
-    nub.innerHTML = '<span>+</span>';
+    nub.innerHTML = '<span>›</span>';
     nub.title = 'Add another filter';
 
     // Assemble panel
@@ -1032,6 +1034,21 @@
     // Add to DOM
     const container = document.getElementById('filterPanelsContainer');
     container.appendChild(panel);
+
+    // Hide previous panel's nub (if any) since this panel is now the last one
+    // Note: filterPanels.length is now >= 1 since we just pushed
+    if(filterPanels.length > 1){
+      // There was a previous panel - hide its nub
+      const prevPanel = filterPanels[filterPanels.length - 2];
+      const prevNub = prevPanel.element.querySelector('.add-filter-nub');
+      if(prevNub) prevNub.classList.add('hidden');
+    }
+
+    // Also hide the main sidebar nub when first panel is added
+    if(filterPanels.length === 1){
+      const mainNub = document.getElementById('addFilterNub');
+      if(mainNub) mainNub.classList.add('hidden');
+    }
 
     // Animate in
     requestAnimationFrame(() => {
@@ -1068,6 +1085,17 @@
     panel.element.remove();
     filterPanels.splice(index, 1);
 
+    // Show the previous panel's nub (now it's the last panel)
+    if(filterPanels.length > 0){
+      const lastPanel = filterPanels[filterPanels.length - 1];
+      const lastNub = lastPanel.element.querySelector('.add-filter-nub');
+      if(lastNub) lastNub.classList.remove('hidden');
+    } else {
+      // If no panels left, show the main sidebar nub
+      const mainNub = document.getElementById('addFilterNub');
+      if(mainNub) mainNub.classList.remove('hidden');
+    }
+
     // Re-compute filtering with remaining panels
     updateAllFilterHighlighting();
     updateWorkspacePosition();
@@ -1100,10 +1128,30 @@
     if(spinner) spinner.style.display = 'flex';
     if(resultsContent) resultsContent.style.display = 'none';
 
-    // Search via API
+    // NEW APPROACH: Compute allowed file paths BEFORE searching
+    // Each filter searches ONLY within files from the previous stage
+    const panelIndex = filterPanels.findIndex(p => p.id === panelId);
+
+    // Get file paths from previous stage
+    let allowedFilePaths;
+    if(panelIndex === 0){
+      // First filter: search within primary results
+      allowedFilePaths = lastSearchResults.map(r => r.file_path);
+    } else {
+      // Subsequent filters: search within previous filter's results
+      const prevPanel = filterPanels[panelIndex - 1];
+      allowedFilePaths = prevPanel.results.map(r => r.file_path);
+    }
+
+    console.log(`🔍 [Filter ${panelIndex + 1}] Searching within ${allowedFilePaths.length} files from previous stage`);
+
+    // Search via API with file_paths filter
     const body = {
       query: query,
-      filters: currentAsOfMs ? { as_of_ms: currentAsOfMs } : {},
+      filters: {
+        file_paths: allowedFilePaths,  // NEW: Restrict to files from previous stage
+        ...(currentAsOfMs ? { as_of_ms: currentAsOfMs } : {})
+      },
       options: {
         limit: 200,
         context_lines: 2,
@@ -1121,32 +1169,13 @@
         body: JSON.stringify(body)
       });
 
-      const allResults = res.results || [];
+      // Results are already filtered by ES - no client-side intersection needed!
+      const results = res.results || [];
 
-      // CUMULATIVE INTERSECTION: Filter to include only files that match ALL previous filters
-      const panelIndex = filterPanels.findIndex(p => p.id === panelId);
+      console.log(`✅ [Filter ${panelIndex + 1}] Found ${results.length} files matching "${query}"`);
 
-      // Start with primary results
-      let allowedPaths = new Set(lastSearchResults.map(r => r.file_path));
-
-      // Intersect with all previous filter panels
-      for(let i = 0; i < panelIndex; i++){
-        const prevPanel = filterPanels[i];
-        if(prevPanel.query && prevPanel.rawResults && prevPanel.rawResults.length > 0){
-          const prevPaths = new Set(prevPanel.rawResults.map(r => r.file_path));
-          allowedPaths = new Set([...allowedPaths].filter(p => prevPaths.has(p)));
-        }
-      }
-
-      // Now intersect with current panel's raw results
-      const currentPaths = new Set(allResults.map(r => r.file_path));
-      allowedPaths = new Set([...allowedPaths].filter(p => currentPaths.has(p)));
-
-      // Filter allResults to only include files in allowedPaths
-      const cumulativeResults = allResults.filter(r => allowedPaths.has(r.file_path));
-
-      panel.rawResults = allResults; // Store raw results for use by next panels
-      panel.results = cumulativeResults; // Store cumulative intersection for display
+      // Store results
+      panel.results = results;
 
       // Hide spinner and show results
       if(spinner) spinner.style.display = 'none';
@@ -1154,14 +1183,13 @@
 
       renderFilterPanelResults(panel);
 
-      // Update all subsequent panels (they need to recompute their intersections)
-      // panelIndex already declared above at line 803
+      // Update all subsequent panels (they need to re-search with new file paths)
+      // Since we changed this panel's results, all subsequent panels' allowed paths have changed
       for(let i = panelIndex + 1; i < filterPanels.length; i++){
         const nextPanel = filterPanels[i];
         if(nextPanel.query){
-          // Recompute this panel's displayed results based on new previous results
-          // Don't re-fetch from API, just recompute intersection
-          recomputeFilterPanelIntersection(nextPanel.id);
+          // Re-run the search for this panel with updated file paths from previous panel
+          await updateFilterPanel(nextPanel.id, true); // Pass skipHighlighting=true
         }
       }
 
@@ -1174,36 +1202,6 @@
       if(resultsContent) resultsContent.style.display = 'block';
       showToast('Search failed');
     }
-  }
-
-  // Recompute a panel's intersection without re-fetching from API
-  function recomputeFilterPanelIntersection(panelId){
-    const panel = filterPanels.find(p => p.id === panelId);
-    if(!panel || !panel.rawResults) return;
-
-    const panelIndex = filterPanels.findIndex(p => p.id === panelId);
-
-    // Start with primary results
-    let allowedPaths = new Set(lastSearchResults.map(r => r.file_path));
-
-    // Intersect with all previous filter panels
-    for(let i = 0; i < panelIndex; i++){
-      const prevPanel = filterPanels[i];
-      if(prevPanel.query && prevPanel.rawResults && prevPanel.rawResults.length > 0){
-        const prevPaths = new Set(prevPanel.rawResults.map(r => r.file_path));
-        allowedPaths = new Set([...allowedPaths].filter(p => prevPaths.has(p)));
-      }
-    }
-
-    // Intersect with current panel's raw results
-    const currentPaths = new Set(panel.rawResults.map(r => r.file_path));
-    allowedPaths = new Set([...allowedPaths].filter(p => currentPaths.has(p)));
-
-    // Filter rawResults to get cumulative intersection
-    const cumulativeResults = panel.rawResults.filter(r => allowedPaths.has(r.file_path));
-
-    panel.results = cumulativeResults;
-    renderFilterPanelResults(panel);
   }
 
   // Toggle filter option (fuzzy/partial)
@@ -1448,6 +1446,7 @@
   }
 
   function defineMonacoTheme(){
+    console.log('🎨 [defineMonacoTheme] Defining Monaco themes');
     // Define custom theme matching canvas background and Prism.js colors (Tomorrow Night)
     if(typeof monaco === 'undefined') return;
 
@@ -1477,6 +1476,84 @@
         'editorWhitespace.foreground': '#404040',
       }
     });
+
+    // Define Omarchy theme if available
+    if(currentOmarchyTheme){
+      console.log('🎨 [defineMonacoTheme] Defining Omarchy theme', currentOmarchyTheme);
+      const syntaxColors = currentOmarchyTheme.syntax;
+      const uiColors = currentOmarchyTheme.ui;
+
+      const bg = toMonacoColor(uiColors['--bg'] || '#0a1428');
+      const fg = toMonacoColor(uiColors['--text'] || '#f0f8ff');
+      const accent = toMonacoColor(uiColors['--accent'] || '#39bae6');
+      const border = toMonacoColor(uiColors['--border'] || '#44475a');
+
+      monaco.editor.defineTheme('omarchy', {
+        base: 'vs-dark',
+        inherit: false,
+        rules: [
+          // Comments
+          { token: 'comment', foreground: toMonacoColor(syntaxColors.comment) },
+          { token: 'comment.line', foreground: toMonacoColor(syntaxColors.comment) },
+          { token: 'comment.block', foreground: toMonacoColor(syntaxColors.comment) },
+
+          // Keywords
+          { token: 'keyword', foreground: toMonacoColor(syntaxColors.keyword), fontStyle: 'bold' },
+          { token: 'keyword.control', foreground: toMonacoColor(syntaxColors.keyword), fontStyle: 'bold' },
+
+          // Strings
+          { token: 'string', foreground: toMonacoColor(syntaxColors.string) },
+          { token: 'string.quoted', foreground: toMonacoColor(syntaxColors.string) },
+
+          // Numbers
+          { token: 'number', foreground: toMonacoColor(syntaxColors.number) },
+          { token: 'number.hex', foreground: toMonacoColor(syntaxColors.number) },
+          { token: 'number.float', foreground: toMonacoColor(syntaxColors.number) },
+          { token: 'constant.numeric', foreground: toMonacoColor(syntaxColors.number) },
+
+          // Functions
+          { token: 'entity.name.function', foreground: toMonacoColor(syntaxColors.function) },
+          { token: 'support.function', foreground: toMonacoColor(syntaxColors.function) },
+
+          // Classes/Types
+          { token: 'entity.name.class', foreground: toMonacoColor(syntaxColors.class) },
+          { token: 'entity.name.type', foreground: toMonacoColor(syntaxColors.class) },
+          { token: 'support.class', foreground: toMonacoColor(syntaxColors.class) },
+          { token: 'support.type', foreground: toMonacoColor(syntaxColors.class) },
+
+          // Variables
+          { token: 'variable', foreground: toMonacoColor(syntaxColors.variable) },
+          { token: 'variable.parameter', foreground: toMonacoColor(syntaxColors.variable) },
+
+          // Constants
+          { token: 'constant', foreground: toMonacoColor(syntaxColors.constant) },
+          { token: 'constant.language', foreground: toMonacoColor(syntaxColors.constant) },
+
+          // Operators
+          { token: 'keyword.operator', foreground: toMonacoColor(syntaxColors.operator) },
+
+          // Punctuation
+          { token: 'punctuation', foreground: toMonacoColor(syntaxColors.punctuation) },
+          { token: 'delimiter', foreground: toMonacoColor(syntaxColors.punctuation) },
+        ],
+        colors: {
+          'editor.background': '#' + bg,
+          'editor.foreground': '#' + fg,
+          'editor.lineHighlightBackground': '#' + bg + '40',
+          'editor.selectionBackground': '#' + accent + '40',
+          'editor.inactiveSelectionBackground': '#' + accent + '20',
+          'editorCursor.foreground': '#' + accent,
+          'editorLineNumber.foreground': '#' + toMonacoColor(syntaxColors.comment),
+          'editorLineNumber.activeForeground': '#' + accent,
+          'editorIndentGuide.background': '#' + border + '40',
+          'editorIndentGuide.activeBackground': '#' + border,
+        }
+      });
+
+      console.log('🎨 [defineMonacoTheme] Omarchy theme defined successfully');
+    } else {
+      console.log('🎨 [defineMonacoTheme] No Omarchy theme data available yet');
+    }
   }
 
   async function openOverlayEditor(path){
@@ -1515,7 +1592,7 @@
           language: normalizeLanguageForMonaco(data.language),
           readOnly: false,  // Editable!
           minimap: { enabled: true },
-          theme: 'rewindex-dark',  // Use custom theme
+          theme: systemThemeEnabled && systemThemeAvailable ? 'omarchy' : 'rewindex-dark',
           fontSize: fontSize,
           automaticLayout: true,
         });
@@ -1610,7 +1687,7 @@
         diffEditor = monaco.editor.createDiffEditor(diffEditorContainer, {
           readOnly: true,
           minimap: { enabled: true },
-          theme: 'rewindex-dark',  // Use custom theme
+          theme: systemThemeEnabled && systemThemeAvailable ? 'omarchy' : 'rewindex-dark',
           fontSize: 12,
           automaticLayout: true,
           renderSideBySide: true,
@@ -1943,13 +2020,13 @@
     const perfStart = performance.now();
     const hadContent = tileContent.has(path);
     const inCache = preloadCache.has(path);
-    console.log('📄 [loadTileContent] START', {
-      path: path.substring(path.lastIndexOf('/') + 1), // Just filename for brevity
-      hadContent,
-      inCache,
-      focusLine,
-      hasQuery: !!searchQuery
-    });
+    // console.log('📄 [loadTileContent] START', {
+    //   path: path.substring(path.lastIndexOf('/') + 1), // Just filename for brevity
+    //   hadContent,
+    //   inCache,
+    //   focusLine,
+    //   hasQuery: !!searchQuery
+    // });
 
     let tile = tiles.get(path);
     if(!tile){ await openTile(path); tile = tiles.get(path); }
@@ -1960,7 +2037,7 @@
       data = initData;
     } else if(preloadCache.has(path)){
       data = preloadCache.get(path);
-      console.log('⚡ [loadTileContent] Using cached data (instant!)');
+      //console.log('⚡ [loadTileContent] Using cached data (instant!)');
     } else {
       data = await fetchJSON('/file?path=' + encodeURIComponent(path));
     }
@@ -2115,16 +2192,16 @@
 
     const perfEnd = performance.now();
     const totalDuration = perfEnd - perfStart;
-    console.log('✅ [loadTileContent] END', {
-      path: path.substring(path.lastIndexOf('/') + 1),
-      duration: `${totalDuration.toFixed(2)}ms`,
-      source: inCache ? 'cache' : 'network',
-      bodyChildren: body.children.length,
-      linesRendered: chunkLineCount,
-      totalLines: totalLines,
-      truncated: truncatedCount > 0,
-      prism: prismRan
-    });
+    // console.log('✅ [loadTileContent] END', {
+    //   path: path.substring(path.lastIndexOf('/') + 1),
+    //   duration: `${totalDuration.toFixed(2)}ms`,
+    //   source: inCache ? 'cache' : 'network',
+    //   bodyChildren: body.children.length,
+    //   linesRendered: chunkLineCount,
+    //   totalLines: totalLines,
+    //   truncated: truncatedCount > 0,
+    //   prism: prismRan
+    // });
   }
 
   function highlightSearchTerms(element, query){
@@ -2959,7 +3036,7 @@
       resultsOnlyBtn.classList.toggle('active', resultsOnlyMode);
 
       if(resultsOnlyMode){
-        showToast('Results Only mode: showing only search results');
+        //showToast('Results Only mode: showing only search results');
         // If there's a search query, trigger re-render with results
         if(qEl.value.trim()){
           await doSearch();
@@ -3348,6 +3425,19 @@
         renderResults(results);
       }catch(e){ /* ignore */ }
     });
+    esrc.addEventListener('theme-update', (ev)=>{
+      try{
+        const data = JSON.parse(ev.data || '{}');
+        const theme = data.theme || {};
+        console.log('🎨 [theme] Received theme update via SSE:', theme);
+
+        if(systemThemeEnabled && theme.colors){
+          applySystemTheme(theme.colors, theme.syntax || {}, theme.font || {}, theme.background_url || theme.background);
+        }
+      }catch(e){
+        console.error('🎨 [theme] Error processing theme update:', e);
+      }
+    });
     esrc.addEventListener('file', (ev)=>{
       try{
         const data = JSON.parse(ev.data || '{}');
@@ -3596,9 +3686,16 @@
 
     // RESULTS-ONLY MODE: Only render files from search results (limit 200)
     if(resultsOnlyMode && lastSearchResults.length > 0){
+      // Apply language filter if active
+      let filteredResults = lastSearchResults;
+      if(currentLanguageFilter){
+        filteredResults = lastSearchResults.filter(r => r.language === currentLanguageFilter);
+        console.log(`🔍 [refreshAllTiles] Language filter active: ${currentLanguageFilter} (${filteredResults.length}/${lastSearchResults.length} files)`);
+      }
+
       // Use search results instead of fetching all files
       const maxFiles = 200;
-      const limitedResults = lastSearchResults.slice(0, maxFiles);
+      const limitedResults = filteredResults.slice(0, maxFiles);
       list = limitedResults.map(r => r.file_path);
 
       // Fetch metadata for these specific files
@@ -3629,14 +3726,24 @@
 
     // Store file metadata for treemap mode
     fileMeta.clear();
+    fileLanguages.clear(); // Clear before repopulating
     for(const f of filesWithMeta){
       if(f.file_path){
         fileMeta.set(f.file_path, {
           size_bytes: f.size_bytes || 0,
           line_count: f.line_count || 1
         });
+        // Populate language data early for language bar
+        if(f.language){
+          fileLanguages.set(f.file_path, f.language);
+        }
       }
     }
+
+    console.log('🎨 [refreshAllTiles] Populated fileLanguages', {
+      count: fileLanguages.size,
+      languages: [...new Set(fileLanguages.values())]
+    });
 
     // Rebuild canvas & tiles for new file set
     // PERFORMANCE: Batch DOM operations to avoid layout thrashing
@@ -3652,7 +3759,8 @@
 
     // Remove existing tiles
     for(const [p, tile] of tiles){ tile.remove(); }
-    tiles.clear(); tileContent.clear(); filePos.clear(); fileFolder.clear(); fileLanguages.clear();
+    tiles.clear(); tileContent.clear(); filePos.clear(); fileFolder.clear();
+    // NOTE: fileLanguages is NOT cleared here - it was just populated above from metadata!
 
     for(const [, el] of folders){ el.remove(); } folders.clear();
 
@@ -3819,7 +3927,7 @@
 
   function animatePanZoom(toX, toY, toScale, duration=500, onComplete=null){
     activeAnimationCount++;
-    console.log('▶️  [animatePanZoom] START', { activeCount: activeAnimationCount, duration });
+    //console.log('▶️  [animatePanZoom] START', { activeCount: activeAnimationCount, duration });
 
     const fromX = offsetX, fromY = offsetY, fromS = scale;
     const start = performance.now();
@@ -3828,7 +3936,7 @@
     function step(now){
       if(!isAnimating){
         activeAnimationCount--;
-        console.log('⏹️  [animatePanZoom] STOPPED (isAnimating=false)', { activeCount: activeAnimationCount });
+        //console.log('⏹️  [animatePanZoom] STOPPED (isAnimating=false)', { activeCount: activeAnimationCount });
         return;
       }
       const t = Math.min(1, (now - start) / duration);
@@ -3842,7 +3950,7 @@
       } else {
         isAnimating = false;
         activeAnimationCount--;
-        console.log('✅ [animatePanZoom] COMPLETE', { activeCount: activeAnimationCount });
+        //console.log('✅ [animatePanZoom] COMPLETE', { activeCount: activeAnimationCount });
         if(onComplete) onComplete();
       }
     }
@@ -3979,6 +4087,19 @@
       }
     }
 
+    console.log('📊 [updateLanguageBar]', {
+      totalFiles: fileLanguages.size,
+      countedFiles: total,
+      languages: Object.keys(counts)
+    });
+
+    // If no languages, clear and return
+    if(total === 0){
+      languageBarEl.innerHTML = '';
+      languageLegendEl.innerHTML = '';
+      return;
+    }
+
     // Sort by count descending
     const sorted = Object.entries(counts).sort((a, b) => b[1] - a[1]);
 
@@ -3994,7 +4115,7 @@
       languageBarEl.appendChild(segment);
     });
 
-    // Render legend
+    // Render legend (clickable to filter by language)
     languageLegendEl.innerHTML = '';
     sorted.forEach(([lang, count]) => {
       const item = document.createElement('div');
@@ -4012,6 +4133,18 @@
       countSpan.className = 'language-legend-count';
       countSpan.textContent = `(${count})`;
 
+      // Make clickable to filter by this language
+      item.style.cursor = 'pointer';
+      item.title = `Click to filter by ${lang} files`;
+      item.onclick = () => {
+        filterByLanguage(lang);
+      };
+
+      // Highlight if currently filtered by this language
+      if(currentLanguageFilter === lang){
+        item.classList.add('active');
+      }
+
       item.appendChild(dot);
       item.appendChild(label);
       item.appendChild(countSpan);
@@ -4019,12 +4152,92 @@
     });
   }
 
+  // Filter files by language (called when clicking language legend)
+  async function filterByLanguage(lang){
+    console.log('🔍 [filterByLanguage]', { lang, current: currentLanguageFilter });
+
+    // Toggle: if clicking same language, clear filter
+    if(currentLanguageFilter === lang){
+      currentLanguageFilter = null;
+      console.log('✅ Cleared language filter');
+    } else {
+      currentLanguageFilter = lang;
+      console.log(`✅ Filtering by language: ${lang}`);
+    }
+
+    // Update language bar to show active state
+    updateLanguageBar();
+
+    // In results-only mode, re-render with filter applied
+    if(resultsOnlyMode && lastSearchResults.length > 0){
+      // refreshAllTiles will apply the language filter
+      await refreshAllTiles(currentAsOfMs);
+
+      // Re-render results panel with filtered results
+      const filtered = currentLanguageFilter
+        ? lastSearchResults.filter(r => r.language === currentLanguageFilter)
+        : lastSearchResults;
+
+      console.log(`📊 Filtered ${filtered.length} / ${lastSearchResults.length} results by language`);
+      renderResults(filtered, filtered.length, true);
+
+      // Start background preload for filtered files
+      if(filtered.length > 0){
+        const filePaths = filtered.map(r => r.file_path);
+        startBackgroundPreload(filePaths).catch(e => {
+          console.error('[preload] Error:', e);
+        });
+      }
+
+      // IMPORTANT: Recalculate all filter panels after language filter is applied
+      // Each filter panel searches within the previous stage, so they cascade
+      console.log(`🔄 Recalculating ${filterPanels.length} filter panel(s)...`);
+      for(const panel of filterPanels){
+        if(panel.query){
+          // Re-run the search for this panel (will cascade from new filtered base)
+          await updateFilterPanel(panel.id, true); // skipHighlighting=true
+        }
+      }
+    }
+    // In show-all mode, apply dimming
+    else if(!resultsOnlyMode){
+      // Apply dimming to non-matching language files
+      for(const [path, tile] of tiles){
+        const fileLang = fileLanguages.get(path);
+        if(currentLanguageFilter && fileLang !== currentLanguageFilter){
+          tile.classList.add('dim');
+        } else {
+          tile.classList.remove('dim');
+        }
+      }
+
+      // Also dim/undim folders
+      for(const [folderPath, folderEl] of folders){
+        // Check if folder has any files matching the language
+        let hasMatch = false;
+        for(const [path, lang] of fileLanguages){
+          if(fileFolder.get(path) === folderPath){
+            if(!currentLanguageFilter || lang === currentLanguageFilter){
+              hasMatch = true;
+              break;
+            }
+          }
+        }
+        if(hasMatch){
+          folderEl.classList.remove('dim');
+        } else {
+          folderEl.classList.add('dim');
+        }
+      }
+    }
+  }
+
   async function spawnAll(){
     try{
       // RESULTS-ONLY MODE: Skip loading all files on initial load
       // User must perform a search first
       if(resultsOnlyMode){
-        resultsEl.innerHTML = '<div class="results-count" style="color: #888; padding: 10px;">🔍 <strong>Results Only mode</strong><br/>Enter a search query to see matching files.<br/><br/>Tip: Click "Results Only" button to switch to "Show All" mode.</div>';
+        resultsEl.innerHTML = '<div class="results-count" style="color: #888; padding: 10px;"><strong>Results Only mode</strong><br/>Enter a search query to see matching files.<br/><br/>Tip: Click "Results Only" button to switch to "Show All" mode.</div>';
         return;
       }
 
@@ -4257,6 +4470,378 @@
   startBeadsPolling();
   */
   // END OF DISABLED BEADS INTEGRATION
+
+  // ============================================================================
+  // OMARCHY THEME INTEGRATION
+  // ============================================================================
+
+  let systemThemeEnabled = localStorage.getItem('systemThemeEnabled') !== 'false'; // Default true
+  let systemThemeAvailable = false;
+
+  async function loadSystemTheme(){
+    console.log('🎨 [theme] Checking for system theme...');
+    try {
+      const res = await fetchJSON('/api/system-theme');
+      if(res.available){
+        systemThemeAvailable = true;
+        console.log('🎨 [theme] Omarchy theme system detected!', res.colors);
+
+        // Show toggle button when system theme is available
+        if(systemThemeToggleBtn){
+          systemThemeToggleBtn.style.display = '';
+          // Set initial state
+          if(systemThemeEnabled){
+            systemThemeToggleBtn.classList.add('active');
+          }
+        }
+
+        if(systemThemeEnabled){
+          applySystemTheme(res.colors, res.syntax, res.font, res.background_url);
+        }
+      } else {
+        systemThemeAvailable = false;
+        console.log('🎨 [theme] System theme not available (not running on Omarchy)');
+      }
+    } catch(e){
+      console.warn('🎨 [theme] Failed to load system theme:', e);
+      systemThemeAvailable = false;
+    }
+  }
+
+  function applySystemTheme(colors, syntaxColors, font, backgroundUrl){
+    console.log('🎨 [theme] Applying system theme:', { colors, syntaxColors, font, backgroundUrl });
+
+    // Apply CSS variables
+    const root = document.documentElement;
+    for(const [varName, value] of Object.entries(colors)){
+      root.style.setProperty(varName, value);
+    }
+
+    // Apply font
+    if(font && font.family){
+      applySystemFont(font);
+    }
+
+    // Apply syntax highlighting colors
+    if(syntaxColors && Object.keys(syntaxColors).length > 0){
+      applySyntaxTheme(syntaxColors, colors);
+    }
+
+    // Apply wallpaper background to workspace with dimming overlay
+    if(backgroundUrl){
+      console.log('🎨 [theme] Setting workspace wallpaper:', backgroundUrl);
+      workspace.style.backgroundImage = `linear-gradient(rgba(0, 0, 0, 0.7), rgba(0, 0, 0, 0.7)), url('${backgroundUrl}')`;
+      workspace.style.backgroundSize = 'cover';
+      workspace.style.backgroundPosition = 'center';
+      workspace.style.backgroundRepeat = 'no-repeat';
+      workspace.style.backgroundAttachment = 'fixed';
+    }
+
+    showToast('🎨 System theme applied');
+  }
+
+  function applySystemFont(font){
+    console.log('🎨 [theme] Applying system font:', font);
+
+    // Build font-family with fallbacks (strip "Nerd Font" suffix for base font)
+    const baseName = font.family.replace(/\s*Nerd\s*Font\s*/i, '').trim();
+    const fontFamily = `'${font.family}', '${baseName}', 'Cascadia Code', 'Fira Code', 'JetBrains Mono', 'Consolas', monospace`;
+
+    // Inject global font CSS
+    let styleId = 'omarchy-font-theme';
+    let styleEl = document.getElementById(styleId);
+
+    if(!styleEl){
+      styleEl = document.createElement('style');
+      styleEl.id = styleId;
+      document.head.appendChild(styleEl);
+    }
+
+    styleEl.textContent = `
+      /* Omarchy System Font */
+      .tile pre,
+      .tile code,
+      pre[class*="language-"],
+      code[class*="language-"] {
+        font-family: ${fontFamily} !important;
+        ${font.size ? `font-size: ${font.size}px !important;` : ''}
+      }
+    `;
+  }
+
+  function applySyntaxTheme(syntaxColors, uiColors){
+    console.log('🎨 [theme] Applying syntax highlighting:', syntaxColors);
+
+    // Inject custom Prism.js theme overrides
+    let styleId = 'omarchy-syntax-theme';
+    let styleEl = document.getElementById(styleId);
+
+    if(!styleEl){
+      styleEl = document.createElement('style');
+      styleEl.id = styleId;
+      document.head.appendChild(styleEl);
+    }
+
+    // Generate CSS for Prism.js token classes
+    const css = `
+      /* Omarchy Syntax Theme (Prism.js) */
+      .token.comment,
+      .token.prolog,
+      .token.doctype,
+      .token.cdata {
+        color: ${syntaxColors.comment} !important;
+      }
+
+      .token.punctuation {
+        color: ${syntaxColors.punctuation} !important;
+      }
+
+      .token.property,
+      .token.tag,
+      .token.boolean,
+      .token.constant,
+      .token.symbol,
+      .token.deleted {
+        color: ${syntaxColors.constant} !important;
+      }
+
+      .token.selector,
+      .token.attr-name,
+      .token.string,
+      .token.char,
+      .token.builtin,
+      .token.inserted {
+        color: ${syntaxColors.string} !important;
+      }
+
+      .token.operator,
+      .token.entity,
+      .token.url,
+      .language-css .token.string,
+      .style .token.string {
+        color: ${syntaxColors.operator} !important;
+      }
+
+      .token.atrule,
+      .token.attr-value,
+      .token.keyword {
+        color: ${syntaxColors.keyword} !important;
+      }
+
+      .token.function,
+      .token.class-name {
+        color: ${syntaxColors.function} !important;
+      }
+
+      .token.number {
+        color: ${syntaxColors.number} !important;
+      }
+
+      .token.variable {
+        color: ${syntaxColors.variable} !important;
+      }
+
+      .token.regex,
+      .token.important {
+        color: ${syntaxColors.number} !important;
+        font-weight: bold;
+      }
+    `;
+
+    styleEl.textContent = css;
+
+    // Always call applyMonacoTheme to store theme data, even if Monaco isn't loaded yet
+    // This ensures the theme is available when Monaco loads later
+    applyMonacoTheme(syntaxColors, uiColors || {});
+  }
+
+  // Helper to convert rgba/hex to RRGGBB for Monaco
+  function toMonacoColor(color){
+    if(!color) return 'FFFFFF';
+
+    // If hex, strip #
+    if(color.startsWith('#')){
+      return color.substring(1).toUpperCase();
+    }
+
+    // If rgba, extract rgb and convert to hex
+    const rgbaMatch = color.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/);
+    if(rgbaMatch){
+      const r = parseInt(rgbaMatch[1]).toString(16).padStart(2, '0');
+      const g = parseInt(rgbaMatch[2]).toString(16).padStart(2, '0');
+      const b = parseInt(rgbaMatch[3]).toString(16).padStart(2, '0');
+      return (r + g + b).toUpperCase();
+    }
+
+    return 'FFFFFF';
+  }
+
+  // Store current theme data globally for Monaco theme definition
+  let currentOmarchyTheme = null;
+
+  function applyMonacoTheme(syntaxColors, uiColors){
+    console.log('🎨 [theme] Creating Monaco theme');
+
+    // Store theme data globally
+    currentOmarchyTheme = { syntax: syntaxColors, ui: uiColors };
+
+    // Check if Monaco is loaded
+    if(typeof monaco === 'undefined'){
+      console.log('🎨 [theme] Monaco not loaded yet, theme will be applied when Monaco loads');
+      return;
+    }
+
+    try {
+      const bg = toMonacoColor(uiColors['--bg'] || '#0a1428');
+      const fg = toMonacoColor(uiColors['--text'] || '#f0f8ff');
+      const accent = toMonacoColor(uiColors['--accent'] || '#39bae6');
+      const border = toMonacoColor(uiColors['--border'] || '#44475a');
+
+      // Define custom Monaco theme with comprehensive token mappings
+      monaco.editor.defineTheme('omarchy', {
+        base: 'vs-dark',
+        inherit: false, // Don't inherit to have full control
+        rules: [
+          // Comments
+          { token: 'comment', foreground: toMonacoColor(syntaxColors.comment) },
+          { token: 'comment.line', foreground: toMonacoColor(syntaxColors.comment) },
+          { token: 'comment.block', foreground: toMonacoColor(syntaxColors.comment) },
+
+          // Keywords
+          { token: 'keyword', foreground: toMonacoColor(syntaxColors.keyword), fontStyle: 'bold' },
+          { token: 'keyword.control', foreground: toMonacoColor(syntaxColors.keyword), fontStyle: 'bold' },
+
+          // Strings
+          { token: 'string', foreground: toMonacoColor(syntaxColors.string) },
+          { token: 'string.quoted', foreground: toMonacoColor(syntaxColors.string) },
+
+          // Numbers
+          { token: 'number', foreground: toMonacoColor(syntaxColors.number) },
+          { token: 'number.hex', foreground: toMonacoColor(syntaxColors.number) },
+          { token: 'number.float', foreground: toMonacoColor(syntaxColors.number) },
+          { token: 'constant.numeric', foreground: toMonacoColor(syntaxColors.number) },
+
+          // Functions
+          { token: 'entity.name.function', foreground: toMonacoColor(syntaxColors.function) },
+          { token: 'support.function', foreground: toMonacoColor(syntaxColors.function) },
+
+          // Classes/Types
+          { token: 'entity.name.class', foreground: toMonacoColor(syntaxColors.class) },
+          { token: 'entity.name.type', foreground: toMonacoColor(syntaxColors.class) },
+          { token: 'support.class', foreground: toMonacoColor(syntaxColors.class) },
+          { token: 'support.type', foreground: toMonacoColor(syntaxColors.class) },
+
+          // Variables
+          { token: 'variable', foreground: toMonacoColor(syntaxColors.variable) },
+          { token: 'variable.parameter', foreground: toMonacoColor(syntaxColors.variable) },
+
+          // Constants
+          { token: 'constant', foreground: toMonacoColor(syntaxColors.constant) },
+          { token: 'constant.language', foreground: toMonacoColor(syntaxColors.constant) },
+
+          // Operators
+          { token: 'keyword.operator', foreground: toMonacoColor(syntaxColors.operator) },
+
+          // Punctuation
+          { token: 'punctuation', foreground: toMonacoColor(syntaxColors.punctuation) },
+          { token: 'delimiter', foreground: toMonacoColor(syntaxColors.punctuation) },
+        ],
+        colors: {
+          'editor.background': '#' + bg,
+          'editor.foreground': '#' + fg,
+          'editor.lineHighlightBackground': '#' + bg + '40',
+          'editor.selectionBackground': '#' + accent + '40',
+          'editor.inactiveSelectionBackground': '#' + accent + '20',
+          'editorCursor.foreground': '#' + accent,
+          'editorLineNumber.foreground': '#' + toMonacoColor(syntaxColors.comment),
+          'editorLineNumber.activeForeground': '#' + accent,
+          'editorIndentGuide.background': '#' + border + '40',
+          'editorIndentGuide.activeBackground': '#' + border,
+        }
+      });
+
+      // Apply theme to existing editors
+      if(overlayEditor){
+        monaco.editor.setTheme('omarchy');
+      }
+      if(diffEditor){
+        monaco.editor.setTheme('omarchy');
+      }
+
+      console.log('🎨 [theme] Monaco theme applied');
+    } catch(e){
+      console.warn('🎨 [theme] Failed to apply Monaco theme:', e);
+    }
+  }
+
+  function clearSystemTheme(){
+    console.log('🎨 [theme] Clearing system theme, reverting to default');
+
+    // Clear all CSS variable overrides
+    const root = document.documentElement;
+    root.style.removeProperty('--bg');
+    root.style.removeProperty('--text');
+    root.style.removeProperty('--muted');
+    root.style.removeProperty('--border');
+    root.style.removeProperty('--accent');
+    root.style.removeProperty('--hover');
+
+    // Clear syntax highlighting overrides
+    const syntaxStyleEl = document.getElementById('omarchy-syntax-theme');
+    if(syntaxStyleEl){
+      syntaxStyleEl.remove();
+    }
+
+    // Clear font overrides
+    const fontStyleEl = document.getElementById('omarchy-font-theme');
+    if(fontStyleEl){
+      fontStyleEl.remove();
+    }
+
+    // Clear workspace wallpaper
+    workspace.style.backgroundImage = '';
+
+    // Revert Monaco to default theme
+    if(typeof monaco !== 'undefined'){
+      try {
+        monaco.editor.setTheme('vs-dark');
+      } catch(e){ /* ignore */ }
+    }
+
+    showToast('System theme disabled');
+  }
+
+  function toggleSystemTheme(){
+    systemThemeEnabled = !systemThemeEnabled;
+    localStorage.setItem('systemThemeEnabled', String(systemThemeEnabled));
+
+    // Update button state
+    if(systemThemeToggleBtn){
+      if(systemThemeEnabled){
+        systemThemeToggleBtn.classList.add('active');
+      } else {
+        systemThemeToggleBtn.classList.remove('active');
+      }
+    }
+
+    if(systemThemeEnabled){
+      loadSystemTheme(); // Re-load and apply
+    } else {
+      clearSystemTheme();
+    }
+  }
+
+  // Wire up toggle button
+  if(systemThemeToggleBtn){
+    systemThemeToggleBtn.onclick = toggleSystemTheme;
+  }
+
+  // Load theme on startup
+  loadSystemTheme();
+
+  // ============================================================================
+  // END OMARCHY THEME INTEGRATION
+  // ============================================================================
 
   // Start performance monitoring
   console.log('🚀 [APP] Initializing performance monitoring');

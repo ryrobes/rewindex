@@ -12,6 +12,7 @@ from .config import Config, find_project_root
 from .search import SearchFilters, SearchOptions, simple_search_es
 from .es import ESClient, ensure_indices
 from .indexing import poll_watch
+from .theme_watcher import OmarchyThemeWatcher
 
 
 class EventBroker:
@@ -48,6 +49,37 @@ QUERIES: list[dict] = []
 QUERIES_LOCK = threading.Lock()
 
 
+def poll_theme_changes(watcher: OmarchyThemeWatcher, interval_s: float, stop_event: threading.Event):
+    """
+    Poll for Omarchy theme changes and broadcast updates.
+
+    Args:
+        watcher: OmarchyThemeWatcher instance
+        interval_s: Polling interval in seconds
+        stop_event: Event to signal stop
+    """
+    import time
+    import logging
+    logger = logging.getLogger(__name__)
+    logger.info(f"🎨 Theme polling started (interval: {interval_s}s)")
+
+    while not stop_event.is_set():
+        try:
+            # Check for theme changes
+            if watcher.check_for_changes():
+                theme = watcher.get_current_theme()
+                if theme:
+                    BROKER.publish({"type": "theme-update", "theme": theme})
+                    logger.info("🎨 Theme update broadcasted to clients")
+        except Exception as e:
+            logger.error(f"Error polling theme: {e}")
+
+        # Wait for interval or stop signal
+        stop_event.wait(timeout=interval_s)
+
+    logger.info("🎨 Theme polling stopped")
+
+
 def _json_response(handler: BaseHTTPRequestHandler, code: int, payload: Dict[str, Any]) -> None:
     data = json.dumps(payload).encode("utf-8")
     handler.send_response(code)
@@ -62,6 +94,9 @@ class RewindexHandler(BaseHTTPRequestHandler):
     watcher_thread: threading.Thread | None = None
     watcher_stop: threading.Event | None = None
     beads_root: Path | None = None  # Optional beads working directory
+    theme_watcher: OmarchyThemeWatcher | None = None  # Omarchy theme integration
+    theme_poll_thread: threading.Thread | None = None
+    theme_poll_stop: threading.Event | None = None
 
     def do_GET(self) -> None:  # noqa: N802
         root = find_project_root(Path.cwd())
@@ -93,6 +128,81 @@ class RewindexHandler(BaseHTTPRequestHandler):
         # Simple health
         if path_only == "/health":
             _json_response(self, 200, {"ok": True})
+            return
+
+        # Omarchy theme integration endpoints
+        if path_only == "/api/system-theme":
+            # Return current Omarchy theme colors (if available)
+            if not RewindexHandler.theme_watcher:
+                # Initialize theme watcher on first request
+                RewindexHandler.theme_watcher = OmarchyThemeWatcher()
+
+                # Auto-start theme polling if Omarchy is available
+                if RewindexHandler.theme_watcher.is_available:
+                    if not RewindexHandler.theme_poll_thread or not RewindexHandler.theme_poll_thread.is_alive():
+                        RewindexHandler.theme_poll_stop = threading.Event()
+                        t = threading.Thread(
+                            target=poll_theme_changes,
+                            args=(RewindexHandler.theme_watcher, 2.0, RewindexHandler.theme_poll_stop),
+                            daemon=True,
+                        )
+                        RewindexHandler.theme_poll_thread = t
+                        t.start()
+                        import logging
+                        logging.getLogger(__name__).info("🎨 Theme polling auto-started")
+
+            theme = RewindexHandler.theme_watcher.get_current_theme()
+            if theme:
+                # Add cache-busting hash to background URL
+                bg_url = None
+                if theme['background'] and theme['background_hash']:
+                    bg_url = f"/api/system-theme/background?v={theme['background_hash']}"
+                elif theme['background']:
+                    bg_url = "/api/system-theme/background"
+
+                _json_response(self, 200, {
+                    "available": True,
+                    "colors": theme['colors'],
+                    "syntax": theme.get('syntax', {}),
+                    "font": theme.get('font', {}),
+                    "background_url": bg_url
+                })
+            else:
+                _json_response(self, 200, {"available": False})
+            return
+
+        if path_only == "/api/system-theme/background":
+            # Serve current Omarchy wallpaper
+            if not RewindexHandler.theme_watcher:
+                RewindexHandler.theme_watcher = OmarchyThemeWatcher()
+
+            bg_path = RewindexHandler.theme_watcher.current_background
+            if bg_path and Path(bg_path).exists():
+                try:
+                    # Detect content type from extension
+                    ext = Path(bg_path).suffix.lower()
+                    content_types = {
+                        '.jpg': 'image/jpeg',
+                        '.jpeg': 'image/jpeg',
+                        '.png': 'image/png',
+                        '.webp': 'image/webp',
+                        '.gif': 'image/gif',
+                    }
+                    content_type = content_types.get(ext, 'application/octet-stream')
+
+                    with open(bg_path, 'rb') as f:
+                        data = f.read()
+
+                    self.send_response(200)
+                    self.send_header("Content-Type", content_type)
+                    self.send_header("Content-Length", str(len(data)))
+                    self.send_header("Cache-Control", "public, max-age=60")  # Cache for 1 minute
+                    self.end_headers()
+                    self.wfile.write(data)
+                except Exception as e:
+                    self.send_error(500, f"Error serving background: {e}")
+            else:
+                self.send_error(404, "Background not found")
             return
 
         # Serve basic UI and static assets
@@ -452,6 +562,7 @@ class RewindexHandler(BaseHTTPRequestHandler):
                         has_function=filters.get("has_function"),
                         has_class=filters.get("has_class"),
                         created_before_ms=as_of_ms,
+                        file_paths=filters.get("file_paths"),
                     ),
                     SearchOptions(
                         limit=options.get("limit", 20),

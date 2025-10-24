@@ -18,6 +18,7 @@ class SearchFilters:
     has_class: Optional[str] = None
     is_current: Optional[bool] = True
     created_before_ms: Optional[int] = None  # as-of filter
+    file_paths: Optional[List[str]] = None  # Restrict search to specific files (for cascading filters)
 
 
 @dataclass
@@ -94,6 +95,9 @@ def simple_search_es(
         # Convert ** to * for ES wildcard
         pat = filters.path_pattern.replace("**", "*")
         filter_clauses.append({"wildcard": {"file_path": pat}})
+    if filters.file_paths:
+        # Restrict to specific file paths (for cascading filters)
+        filter_clauses.append({"terms": {"file_path": filters.file_paths}})
     if filters.has_function:
         filter_clauses.append({"term": {"defined_functions": filters.has_function}})
     if filters.has_class:

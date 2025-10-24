@@ -56,52 +56,54 @@ body {
   border-right: 1px solid var(--border);
   padding: 16px;
   overflow-y: auto;
-  overflow-x: hidden;
+  overflow-x: visible; /* Allow nub to stick out */
   z-index: 100;
   display: flex;
   flex-direction: column;
   box-sizing: border-box;
 }
 
-/* Add Filter Nub - Tab that sticks out from sidebar */
+/* Add Filter Nub - Full-height sliver with chevron */
 .add-filter-nub {
   position: absolute;
-  right: -28px;
-  top: 50%;
-  transform: translateY(-50%);
-  width: 28px;
-  height: 60px;
-  background: rgba(57, 186, 230, 0.2);
-  border: 1px solid rgba(57, 186, 230, 0.3);
-  border-left: none;
-  border-radius: 0 8px 8px 0;
+  right: -20px; /* Stick out 20px */
+  top: 0;
+  width: 20px; /* Thin sliver */
+  height: 100%; /* Full height */
+  background: rgba(57, 186, 230, 0.3);
+  border-right: 2px solid rgba(57, 186, 230, 0.5);
   display: flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  z-index: 101;
+  z-index: 200;
   transition: all 0.2s ease;
   user-select: none;
 }
 
 .add-filter-nub span {
-  font-size: 20px;
-  font-weight: 700;
+  font-size: 16px;
+  font-weight: 400;
   color: var(--accent);
   line-height: 1;
 }
 
 .add-filter-nub:hover {
-  background: rgba(57, 186, 230, 0.3);
-  right: -32px;
-  width: 32px;
-  box-shadow: 0 0 12px rgba(57, 186, 230, 0.4);
+  background: rgba(57, 186, 230, 0.5);
+  width: 24px;
+  right: -24px;
+  border-right-color: rgba(57, 186, 230, 0.8);
+}
+
+/* Hide nub when panel has a next sibling */
+.add-filter-nub.hidden {
+  display: none;
 }
 
 /* Filter Panels Container - holds dynamically created filter panels */
 #filterPanelsContainer {
   position: fixed;
-  left: 320px; /* After primary sidebar */
+  left: 320px; /* Flush after primary sidebar */
   top: 0;
   bottom: 0;
   z-index: 98;
@@ -120,7 +122,7 @@ body {
   border-right: 1px solid var(--border);
   padding: 16px;
   overflow-y: auto;
-  overflow-x: hidden;
+  overflow-x: visible; /* Allow nub to stick out */
   box-sizing: border-box;
   display: flex;
   flex-direction: column;
@@ -239,19 +241,13 @@ body {
 
 /* Each filter panel gets its own nub for adding more panels */
 .filter-panel .add-filter-nub {
-  right: -28px;
-  background: rgba(57, 186, 230, 0.15);
-  border-color: rgba(57, 186, 230, 0.25);
-}
-
-.filter-panel .add-filter-nub:hover {
-  background: rgba(57, 186, 230, 0.25);
-  right: -32px;
+  /* Inherit base styling, just ensure z-index */
+  z-index: 200;
 }
 
 #workspace {
   position: absolute;
-  left: 320px; /* Start after primary sidebar */
+  left: 320px; /* Flush after primary sidebar */
   right: 0;
   top: 0;
   bottom: 0;
@@ -670,6 +666,19 @@ body {
   align-items: center;
   gap: 4px;
   overflow: hidden;
+  padding: 3px 6px;
+  border-radius: 3px;
+  transition: background 0.15s ease;
+}
+
+.language-legend-item:hover {
+  background: rgba(57, 186, 230, 0.1);
+}
+
+.language-legend-item.active {
+  background: rgba(57, 186, 230, 0.2);
+  border: 1px solid rgba(57, 186, 230, 0.4);
+  padding: 2px 5px; /* Adjust for border */
 }
 
 .language-legend-dot {
@@ -1283,13 +1292,24 @@ body {
   color: var(--muted);
   display: flex;
   justify-content: space-between;
-  align-items: center;
+  align-items: flex-start; /* Align to top so right stays at top when path wraps */
+  gap: 8px;
+}
+
+.tile .title > span:first-child {
+  /* File path - allow wrapping but break long paths intelligently */
+  min-width: 0;
+  flex: 1;
+  word-break: break-word; /* Break long paths at any point if needed */
+  overflow-wrap: break-word;
 }
 
 .tile .title .right {
   display: inline-flex;
   gap: 8px;
   align-items: center;
+  flex-shrink: 0; /* Never shrink - always visible */
+  white-space: nowrap; /* Keep right side on one line */
 }
 
 .tile .title .lang {
