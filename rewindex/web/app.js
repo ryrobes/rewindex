@@ -35,7 +35,11 @@
   const overlayEditorContainer = document.getElementById('overlayEditorContainer');
   const saveOverlayBtn = document.getElementById('saveOverlay');
   const cancelOverlayBtn = document.getElementById('cancelOverlay');
+  const fileTimelineEl = document.getElementById('fileTimeline');
+  const fileTimelineMarkersEl = document.getElementById('fileTimelineMarkers');
   const diffOverlayEl = document.getElementById('diffOverlay');
+  const diffTimelineEl = document.getElementById('diffTimeline');
+  const diffTimelineMarkersEl = document.getElementById('diffTimelineMarkers');
   const diffFilePathEl = document.getElementById('diffFilePath');
   const diffEditorContainer = document.getElementById('diffEditorContainer');
   const restoreDiffBtn = document.getElementById('restoreDiff');
@@ -82,6 +86,7 @@
   let diffEditor = null; // Monaco diff editor instance
   let diffEditorPath = null; // Current file path in diff mode
   let diffHistoricalContent = null; // Historical content for restore
+  let diffSelectedHash = null; // Currently selected version hash in diff mode
   let currentProjectRoot = null; // Current project root directory
   // DISABLED: Beads integration (commented out for now)
   // let beadsAvailable = false;
@@ -1597,6 +1602,93 @@
     }
   }
 
+  async function loadFileHistory(path){
+    try{
+      const history = await fetchJSON('/file/history?path=' + encodeURIComponent(path));
+      return history.versions || [];
+    }catch(e){
+      console.error('Failed to load file history:', e);
+      return [];
+    }
+  }
+
+  function renderFileTimeline(versions, currentPath, options = {}){
+    const {
+      timelineEl = fileTimelineEl,
+      markersEl = fileTimelineMarkersEl,
+      selectedHash = null,  // Which version is currently selected
+      isDiffMode = false,   // Whether we're in diff mode
+    } = options;
+
+    if(!markersEl) return;
+
+    // Clear existing markers
+    markersEl.innerHTML = '';
+
+    if(!versions || versions.length === 0){
+      if(timelineEl) timelineEl.style.display = 'none';
+      return;
+    }
+
+    // Always show timeline (in both live and diff modes)
+    if(timelineEl) timelineEl.style.display = 'flex';
+
+    console.log('🔍 [fileTimeline] Version data sample:', versions[0]);
+    console.log(`   Selected hash: ${selectedHash}, isDiffMode: ${isDiffMode}`);
+
+    // Sort versions by created_at timestamp (oldest to newest)
+    const sorted = versions.slice().sort((a, b) => (a.created_at || 0) - (b.created_at || 0));
+    const oldest = sorted[0].created_at || 0;
+    const newest = sorted[sorted.length - 1].created_at || 0;
+    const range = newest - oldest || 1;
+
+    // Render markers
+    sorted.forEach((version, index) => {
+      const marker = document.createElement('div');
+      marker.className = 'file-timeline-marker';
+
+      // Mark current version (latest) OR selected version in diff mode
+      const isLatest = index === sorted.length - 1;
+      const isSelected = selectedHash && version.content_hash === selectedHash;
+
+      if(isSelected){
+        marker.classList.add('current');
+        marker.classList.add('selected');
+      } else if(isLatest && !isDiffMode){
+        marker.classList.add('current');
+      }
+
+      // Position on timeline
+      const position = ((version.created_at - oldest) / range) * 100;
+      marker.style.left = `${position}%`;
+
+      // Tooltip
+      const tooltip = document.createElement('div');
+      tooltip.className = 'file-timeline-tooltip';
+      const date = new Date(version.created_at);
+      tooltip.textContent = date.toLocaleString() + (isSelected ? ' (selected)' : '');
+      marker.appendChild(tooltip);
+
+      // Click handler
+      marker.onclick = async (e) => {
+        e.stopPropagation();
+        console.log(`📅 [fileTimeline] Clicked version:`, version);
+
+        if(!isDiffMode){
+          // Close overlay editor and switch to diff mode
+          closeOverlayEditor();
+        }
+
+        // Open/update diff mode with this version
+        await openDiffEditor(currentPath, version.content_hash);
+      };
+
+      markersEl.appendChild(marker);
+    });
+
+    console.log(`🕐 [fileTimeline] Rendered ${sorted.length} versions for ${currentPath}`);
+  }
+
   async function openOverlayEditor(path){
     overlayEditorPath = path;
     overlayFilePathEl.textContent = path;
@@ -1651,6 +1743,15 @@
 
       // Show overlay
       overlayEditorEl.style.display = 'flex';
+
+      // Load and render file history timeline (only in live mode)
+      if(!currentAsOfMs){
+        const versions = await loadFileHistory(path);
+        renderFileTimeline(versions, path);
+      } else {
+        // Hide timeline when time-traveling globally
+        fileTimelineEl.style.display = 'none';
+      }
     }catch(e){
       showToast('Failed to load file for editing');
       console.error('Overlay editor error:', e);
@@ -1664,6 +1765,10 @@
     }
     overlayEditorPath = null;
     overlayEditorEl.style.display = 'none';
+    // Hide file timeline
+    if(fileTimelineEl){
+      fileTimelineEl.style.display = 'none';
+    }
   }
 
   async function saveOverlayEditor(){
@@ -1702,17 +1807,34 @@
     }
   }
 
-  async function openDiffEditor(path){
+  async function openDiffEditor(path, contentHash = null){
     diffEditorPath = path;
     diffFilePathEl.textContent = path;
+    diffSelectedHash = contentHash;  // Store selected hash
 
     try{
       // Fetch current (live) version
       const liveData = await fetchJSON('/file?path=' + encodeURIComponent(path));
       const liveContent = liveData.content || '';
 
-      // Get historical version from tile content
-      let historicalContent = tileContent.get(path) || '';
+      // Get historical version
+      let historicalContent = '';
+      if(contentHash){
+        // Fetch specific version by hash (from file timeline)
+        console.log(`📅 [openDiffEditor] Fetching version by hash: ${contentHash}`);
+        const versionData = await fetchJSON('/version?hash=' + encodeURIComponent(contentHash));
+        historicalContent = versionData.content || '';
+      } else {
+        // Get historical version from tile content (global time-travel mode)
+        historicalContent = tileContent.get(path) || '';
+
+        // If no contentHash provided but we're in global time-travel mode,
+        // try to get the hash from tile content metadata
+        if(currentAsOfMs){
+          // TODO: Could fetch version info to get the hash
+          console.log('📅 [openDiffEditor] Global time-travel mode, no specific hash');
+        }
+      }
 
       // Store historical content for restore
       diffHistoricalContent = historicalContent;
@@ -1766,6 +1888,15 @@
 
       // Show overlay
       diffOverlayEl.style.display = 'flex';
+
+      // Load and render file history timeline in diff mode
+      const versions = await loadFileHistory(path);
+      renderFileTimeline(versions, path, {
+        timelineEl: diffTimelineEl,
+        markersEl: diffTimelineMarkersEl,
+        selectedHash: contentHash,
+        isDiffMode: true,
+      });
     }catch(e){
       showToast('Failed to load diff');
       console.error('Diff editor error:', e);
@@ -1787,7 +1918,12 @@
     }
     diffEditorPath = null;
     diffHistoricalContent = null;
+    diffSelectedHash = null;
     diffOverlayEl.style.display = 'none';
+    // Hide diff timeline
+    if(diffTimelineEl){
+      diffTimelineEl.style.display = 'none';
+    }
   }
 
   function showRestoreConfirmation(){

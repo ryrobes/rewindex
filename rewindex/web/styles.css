@@ -1652,6 +1652,103 @@ body {
   overflow: hidden;
 }
 
+/* File-specific Timeline (bottom of Monaco editor) */
+.file-timeline {
+  flex-shrink: 0;
+  height: 60px;
+  background: rgba(9, 12, 15, 0.95);
+  border-top: 1px solid var(--border);
+  backdrop-filter: blur(8px);
+  display: flex;
+  align-items: center;
+  padding: 0 20px;
+  gap: 12px;
+}
+
+.file-timeline-label {
+  font-size: 11px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+.file-timeline-track {
+  flex: 1;
+  height: 30px;
+  background: rgba(27, 33, 41, 0.8);
+  border-radius: 4px;
+  position: relative;
+  border: 1px solid var(--border);
+}
+
+.file-timeline-markers {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  padding: 0 4px;
+}
+
+.file-timeline-marker {
+  position: absolute;
+  width: 8px;
+  height: 8px;
+  background: var(--accent);
+  border-radius: 50%;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  border: 2px solid rgba(9, 12, 15, 0.9);
+}
+
+.file-timeline-marker:hover {
+  transform: scale(1.5);
+  background: var(--accent-bright);
+  z-index: 10;
+}
+
+.file-timeline-marker.current {
+  width: 12px;
+  height: 12px;
+  background: var(--accent-opaque);
+  box-shadow: 0 0 8px var(--accent);
+}
+
+.file-timeline-marker.selected {
+  background: var(--accent-bright);
+  box-shadow: 0 0 12px var(--accent), 0 0 4px var(--accent-opaque);
+  animation: pulse 2s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.1); }
+}
+
+.file-timeline-tooltip {
+  position: absolute;
+  bottom: 100%;
+  left: 50%;
+  transform: translateX(-50%) translateY(-8px);
+  background: rgba(0, 0, 0, 0.9);
+  color: var(--text);
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-size: 10px;
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+
+.file-timeline-marker:hover .file-timeline-tooltip {
+  opacity: 1;
+}
+
 .editbtn {
   padding: 2px 6px;
   font-size: 10px;
