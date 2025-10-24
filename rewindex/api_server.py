@@ -11,7 +11,7 @@ import threading
 from .config import Config, find_project_root
 from .search import SearchFilters, SearchOptions, simple_search_es
 from .es import ESClient, ensure_indices
-from .indexing import poll_watch
+from .indexing import watch, poll_watch
 from .theme_watcher import OmarchyThemeWatcher
 
 
@@ -61,7 +61,7 @@ def poll_theme_changes(watcher: OmarchyThemeWatcher, interval_s: float, stop_eve
     import time
     import logging
     logger = logging.getLogger(__name__)
-    logger.info(f"🎨 Theme polling started (interval: {interval_s}s)")
+    logger.info(f" Theme polling started (interval: {interval_s}s)")
 
     while not stop_event.is_set():
         try:
@@ -70,14 +70,14 @@ def poll_theme_changes(watcher: OmarchyThemeWatcher, interval_s: float, stop_eve
                 theme = watcher.get_current_theme()
                 if theme:
                     BROKER.publish({"type": "theme-update", "theme": theme})
-                    logger.info("🎨 Theme update broadcasted to clients")
+                    logger.info(" Theme update broadcasted to clients")
         except Exception as e:
             logger.error(f"Error polling theme: {e}")
 
         # Wait for interval or stop signal
         stop_event.wait(timeout=interval_s)
 
-    logger.info("🎨 Theme polling stopped")
+    logger.info(" Theme polling stopped")
 
 
 def _json_response(handler: BaseHTTPRequestHandler, code: int, payload: Dict[str, Any]) -> None:
@@ -149,7 +149,7 @@ class RewindexHandler(BaseHTTPRequestHandler):
                         RewindexHandler.theme_poll_thread = t
                         t.start()
                         import logging
-                        logging.getLogger(__name__).info("🎨 Theme polling auto-started")
+                        logging.getLogger(__name__).info(" Theme polling auto-started")
 
             theme = RewindexHandler.theme_watcher.get_current_theme()
             if theme:
@@ -595,9 +595,9 @@ class RewindexHandler(BaseHTTPRequestHandler):
                     # file-level event
                     BROKER.publish({"type": "file", **ev})
                 t = threading.Thread(
-                    target=poll_watch,
+                    target=watch,
                     args=(Path.cwd(), cfg),
-                    kwargs={"interval_s": 1.0, "stop_event": RewindexHandler.watcher_stop, "on_update": on_update, "on_event": on_event},
+                    kwargs={"stop_event": RewindexHandler.watcher_stop, "on_update": on_update, "on_event": on_event},
                     daemon=True,
                 )
                 RewindexHandler.watcher_thread = t
@@ -842,12 +842,46 @@ def run(host: str = "127.0.0.1", port: int = 8899, beads_root: str | None = None
         RewindexHandler.beads_root = beads_path
         print(f"[rewindex] Beads root: {beads_path}")
 
+    # Auto-start file watcher (always-on watching)
+    try:
+        root = find_project_root(Path.cwd())
+        cfg = Config.load(root)
+
+        RewindexHandler.watcher_stop = threading.Event()
+
+        def on_update(res: Dict[str, Any]):
+            BROKER.publish({"type": "index", "update": res})
+
+        def on_event(ev: Dict[str, Any]):
+            BROKER.publish({"type": "file", **ev})
+
+        watcher_thread = threading.Thread(
+            target=watch,
+            args=(root, cfg),
+            kwargs={
+                "stop_event": RewindexHandler.watcher_stop,
+                "on_update": on_update,
+                "on_event": on_event
+            },
+            daemon=True,
+        )
+        RewindexHandler.watcher_thread = watcher_thread
+        watcher_thread.start()
+        print(f"[rewindex] File watcher started (auto-watching project)")
+    except Exception as e:
+        print(f"[rewindex] WARNING: Could not start file watcher: {e}")
+
     httpd = ThreadingHTTPServer((host, port), RewindexHandler)
     print(f"[rewindex] HTTP server on http://{host}:{port}")
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
         print("\n[rewindex] HTTP server stopped.")
+        # Clean shutdown of watcher
+        if RewindexHandler.watcher_stop is not None:
+            RewindexHandler.watcher_stop.set()
+        if RewindexHandler.watcher_thread is not None:
+            RewindexHandler.watcher_thread.join(timeout=2.0)
 
 
 if __name__ == "__main__":

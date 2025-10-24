@@ -51,7 +51,7 @@ The TUI fully supports mouse interaction:
 - 🔍 **Live search** - Results update as you type
 - 🎛️ **Search modes** - Fuzzy and partial matching with checkboxes
 - 📊 **Timeline sparkline** - See file activity over last 7 days
-- 🎨 **Language indicators** - Color-coded file types
+-  **Language indicators** - Color-coded file types
 - ⌨️  **Vim bindings** - j/k navigation
 - 📝 **Editor integration** - Opens at exact line number
 

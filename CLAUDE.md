@@ -11,7 +11,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 1. **Content is the document, everything else is metadata** - The indexed document is just the file content. All other data (functions, classes, imports) are metadata fields for filtering.
 2. **Fast regex over complex parsing** - Uses simple regex patterns for metadata extraction instead of ASTs. Good enough beats perfect.
 3. **LLM-first** - Optimized for how LLMs search: simple commands, predictable JSON output, line-aware results with context.
-4. **Zero Python dependencies** - Uses only stdlib (urllib, json, hashlib). No elasticsearch-py, requests, or external parsers.
+4. **Minimal dependencies** - Only one required dependency (`watchdog` for file watching). Uses stdlib for everything else (urllib, json, hashlib). No elasticsearch-py, requests, or external parsers.
 
 ## Development Commands
 
@@ -169,7 +169,9 @@ rewindex tui
 
 **indexing.py** - File scanning and indexing
 - `index_project()`: scans directory, computes hashes, indexes/updates documents
-- `poll_watch()`: simple polling-based file watcher (no inotify/watchdog)
+- `watch()`: event-driven file watcher using OS-level file system events (via watchdog library)
+- `index_single_file()`: indexes a single file (used by watchdog event handler)
+- `poll_watch()`: fallback polling-based file watcher (if watchdog unavailable)
 - Handles deletions and renames via hash-based detection
 - Returns stats: `{"added": n, "updated": n, "skipped": n}`
 - `_is_binary_file()`: detects binary files via null bytes and UTF-8 validation
@@ -263,7 +265,8 @@ rewindex tui
 3. **API Server**: `api_server.py` → `search.py`/`indexing.py` → `es.py`
    - HTTP requests → search or index operations
    - WebSocket broadcasts events to connected UI clients
-   - Background thread runs poll_watch when watcher is started
+   - Background thread runs watch() auto-started when server starts
+   - Uses watchdog for event-driven watching (falls back to polling if unavailable)
 
 ### Document Structure
 
@@ -337,10 +340,12 @@ rewindex tui
 - `.gitignore` patterns applied before binary detection for efficiency
 
 ### File Watching
-- Simple polling loop (`poll_watch()`) re-indexes all candidates every interval
-- Skips unchanged files (hash comparison)
-- Debounce controlled by `cfg.indexing.watch.debounce_ms`
-- No OS-level watchers (inotify/kqueue) to avoid dependencies
+- Event-driven watching via `watchdog` library (bundled dependency)
+- Uses OS-level file system events (inotify on Linux, FSEvents on macOS, ReadDirectoryChangesW on Windows)
+- Only indexes files that actually change (not full project scans)
+- Debouncing prevents duplicate events for rapid file changes
+- Falls back to `poll_watch()` if watchdog unavailable
+- Watcher auto-starts when server starts (always-on watching)
 
 ### Rename and Deletion Detection
 - `_mark_missing_as_deleted()` queries all current files, compares to present_paths set
@@ -992,9 +997,10 @@ For detailed implementation, see `WEB_UI_SECONDARY_FILTER.md`.
 
 ## Performance Considerations
 
-- **Polling watcher**: Naive, scans all files every interval. Good for <10k files. For larger repos, consider OS-level watchers (future work).
+- **Event-driven watcher**: Uses watchdog library for OS-level file system events. Highly scalable, suitable for large projects (100k+ files). Only processes files that actually change.
+- **Fallback polling watcher**: If watchdog unavailable, falls back to polling. Scans all files every interval. Good for <10k files.
 - **Parallel indexing**: `cfg.indexing.parallel_workers` currently set to 1 (sequential). Increase for faster indexing.
-- **Batch size**: `cfg.indexing.watch.batch_size` (not fully implemented). Use bulk API for large batches.
+- **Batch size**: Stats broadcasting batched with 0.5s delay to reduce event spam.
 - **Index size**: Stores full content in both indices. For very large codebases, consider compression or content deduplication.
 - **Search performance**: Elasticsearch is fast (<50ms for simple queries). Complexity comes from post-processing (line mapping).
 

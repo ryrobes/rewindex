@@ -18,8 +18,6 @@
   const followUpdatesBtn = document.getElementById('followUpdates');
   const dynTextBtn = document.getElementById('dynText');
   const systemThemeToggleBtn = document.getElementById('systemThemeToggle');
-  const startWatch = document.getElementById('startWatch');
-  const stopWatch = document.getElementById('stopWatch');
   const languageBarEl = document.getElementById('languageBar');
   const languageLegendEl = document.getElementById('languageLegend');
   const timeline = document.getElementById('timeline');
@@ -320,16 +318,8 @@
         const projectName = s.project_root.split('/').pop() || s.project_root;
         qEl.placeholder = `search ${projectName}`;
       }
-
-      // Conditionally show/hide watcher buttons based on state
-      const watcherRunning = s.watcher === 'running';
-      if(startWatch) startWatch.classList.toggle('hidden', watcherRunning);
-      if(stopWatch) stopWatch.classList.toggle('hidden', !watcherRunning);
     }catch(e){
       statusEl.textContent = 'status unavailable';
-      // Show both buttons if status fails
-      if(startWatch) startWatch.classList.remove('hidden');
-      if(stopWatch) stopWatch.classList.remove('hidden');
     }
   }
 
@@ -1419,14 +1409,16 @@
 
   // Update workspace left position based on number of panels
   function updateWorkspacePosition(){
-    const workspace = document.getElementById('workspace');
-    const sidebar = document.getElementById('sidebar');
-    const panelCount = filterPanels.length;
-    const baseLeft = sidebar ? parseInt(sidebar.style.width || '345') : 345; // Current sidebar width
-    const panelWidth = 300;
-    const totalLeft = baseLeft + (panelCount * panelWidth) + 10;
+    // Workspace now stays at left: 0 (renders under sidebar and panels)
+    // No need to update its position
 
-    workspace.style.left = `${totalLeft}px`;
+    // const workspace = document.getElementById('workspace');
+    // const sidebar = document.getElementById('sidebar');
+    // const panelCount = filterPanels.length;
+    // const baseLeft = sidebar ? parseInt(sidebar.style.width || '345') : 345; // Current sidebar width
+    // const panelWidth = 300;
+    // const totalLeft = baseLeft + (panelCount * panelWidth) + 10;
+    // workspace.style.left = `${totalLeft}px`;
   }
 
   // ============================================================================
@@ -1448,7 +1440,7 @@
   }
 
   function defineMonacoTheme(){
-    console.log('🎨 [defineMonacoTheme] Defining Monaco themes');
+    console.log(' [defineMonacoTheme] Defining Monaco themes');
     // Define custom theme matching canvas background and Prism.js colors (Tomorrow Night)
     if(typeof monaco === 'undefined') return;
 
@@ -1476,12 +1468,16 @@
         'editor.selectionBackground': '#373b41',
         'editorCursor.foreground': '#c5c8c6',
         'editorWhitespace.foreground': '#404040',
+        'minimap.background': '#090c0f00',  // Transparent to match editor
+        'minimapSlider.background': '#ffffff20',
+        'minimapSlider.hoverBackground': '#ffffff30',
+        'minimapSlider.activeBackground': '#ffffff40',
       }
     });
 
     // Define Omarchy theme if available
     if(currentOmarchyTheme){
-      console.log('🎨 [defineMonacoTheme] Defining Omarchy theme', currentOmarchyTheme);
+      console.log(' [defineMonacoTheme] Defining Omarchy theme', currentOmarchyTheme);
       const syntaxColors = currentOmarchyTheme.syntax;
       const uiColors = currentOmarchyTheme.ui;
 
@@ -1539,7 +1535,7 @@
           { token: 'delimiter', foreground: toMonacoColor(syntaxColors.punctuation) },
         ],
         colors: {
-          'editor.background': '#' + bg,
+          'editor.background': '#' + bg + '55',
           'editor.foreground': '#' + fg,
           'editor.lineHighlightBackground': '#' + bg + '40',
           'editor.selectionBackground': '#' + accent + '40',
@@ -1549,12 +1545,16 @@
           'editorLineNumber.activeForeground': '#' + accent,
           'editorIndentGuide.background': '#' + border + '40',
           'editorIndentGuide.activeBackground': '#' + border,
+          'minimap.background': '#' + bg + '00',  // Transparent to match editor
+          'minimapSlider.background': '#' + accent + '30',
+          'minimapSlider.hoverBackground': '#' + accent + '40',
+          'minimapSlider.activeBackground': '#' + accent + '50',
         }
       });
 
-      console.log('🎨 [defineMonacoTheme] Omarchy theme defined successfully');
+      console.log(' [defineMonacoTheme] Omarchy theme defined successfully');
     } else {
-      console.log('🎨 [defineMonacoTheme] No Omarchy theme data available yet');
+      console.log(' [defineMonacoTheme] No Omarchy theme data available yet');
     }
   }
 
@@ -1589,7 +1589,7 @@
         const lineCount = content.split('\n').length;
         const fontSize = calculateDynamicFontSize(lineCount);
 
-        overlayEditor = monaco.editor.create(overlayEditorContainer, {
+        const editorOptions = {
           value: content,
           language: normalizeLanguageForMonaco(data.language),
           readOnly: false,  // Editable!
@@ -1597,7 +1597,17 @@
           theme: systemThemeEnabled && systemThemeAvailable ? 'omarchy' : 'rewindex-dark',
           fontSize: fontSize,
           automaticLayout: true,
-        });
+        };
+
+        // Apply system font if available
+        if(systemThemeEnabled && systemThemeAvailable){
+          const monoFont = document.documentElement.style.getPropertyValue('--font-mono');
+          if(monoFont){
+            editorOptions.fontFamily = monoFont;
+          }
+        }
+
+        overlayEditor = monaco.editor.create(overlayEditorContainer, editorOptions);
       });
 
       // Show overlay
@@ -1686,14 +1696,24 @@
         // Define custom theme
         defineMonacoTheme();
 
-        diffEditor = monaco.editor.createDiffEditor(diffEditorContainer, {
+        const diffEditorOptions = {
           readOnly: true,
           minimap: { enabled: true },
           theme: systemThemeEnabled && systemThemeAvailable ? 'omarchy' : 'rewindex-dark',
           fontSize: 12,
           automaticLayout: true,
           renderSideBySide: true,
-        });
+        };
+
+        // Apply system font if available
+        if(systemThemeEnabled && systemThemeAvailable){
+          const monoFont = document.documentElement.style.getPropertyValue('--font-mono');
+          if(monoFont){
+            diffEditorOptions.fontFamily = monoFont;
+          }
+        }
+
+        diffEditor = monaco.editor.createDiffEditor(diffEditorContainer, diffEditorOptions);
 
         // Set models: original (historical) vs modified (current/live)
         const originalModel = monaco.editor.createModel(historicalContent, normalizeLanguageForMonaco(liveData.language));
@@ -1808,7 +1828,7 @@
     if(!pos){
       // Position not available yet - this shouldn't happen in normal flow
       // but can occur if openTile is called before layout is complete
-      console.warn(`[openTile] No position found for ${path}, using default`);
+      //console.warn(`[openTile] No position found for ${path}, using default`);
       tile.style.left = '0px';
       tile.style.top = '0px';
     } else {
@@ -3099,8 +3119,8 @@
       sidebarWidth = newWidth;
       sidebarEl.style.width = `${newWidth}px`;
 
-      // Update workspace left position
-      workspaceEl.style.left = `${newWidth + 10}px`;
+      // Workspace stays at left: 0 (renders under sidebar)
+      // workspaceEl.style.left = `${newWidth + 10}px`;
 
       // Update filter panels container left position
       filterPanelsContainer.style.left = `${newWidth - 10}px`;
@@ -3384,24 +3404,24 @@
     };
   }
 
-  startWatch.onclick = async ()=>{
-    try{
-      await fetchJSON('/index/start', {method:'POST'});
-      await refreshStatus();
-      showToast('Watcher started');
-    }catch(e){
-      showToast('Failed to start watcher');
-    }
-  };
-  stopWatch.onclick = async ()=>{
-    try{
-      await fetchJSON('/index/stop', {method:'POST'});
-      await refreshStatus();
-      showToast('Watcher stopped');
-    }catch(e){
-      showToast('Failed to stop watcher');
-    }
-  };
+  // startWatch.onclick = async ()=>{
+  //   try{
+  //     await fetchJSON('/index/start', {method:'POST'});
+  //     await refreshStatus();
+  //     showToast('Watcher started');
+  //   }catch(e){
+  //     showToast('Failed to start watcher');
+  //   }
+  // };
+  // stopWatch.onclick = async ()=>{
+  //   try{
+  //     await fetchJSON('/index/stop', {method:'POST'});
+  //     await refreshStatus();
+  //     showToast('Watcher stopped');
+  //   }catch(e){
+  //     showToast('Failed to stop watcher');
+  //   }
+  // };
   if(goLiveBtn){
     goLiveBtn.onclick = async ()=>{
       try{
@@ -3490,13 +3510,13 @@
       try{
         const data = JSON.parse(ev.data || '{}');
         const theme = data.theme || {};
-        console.log('🎨 [theme] Received theme update via SSE:', theme);
+        console.log(' [theme] Received theme update via SSE:', theme);
 
         if(systemThemeEnabled && theme.colors){
           applySystemTheme(theme.colors, theme.syntax || {}, theme.font || {}, theme.background_url || theme.background);
         }
       }catch(e){
-        console.error('🎨 [theme] Error processing theme update:', e);
+        console.error(' [theme] Error processing theme update:', e);
       }
     });
     esrc.addEventListener('file', (ev)=>{
@@ -3824,7 +3844,7 @@
       }
     }
 
-    console.log('🎨 [refreshAllTiles] Populated fileLanguages', {
+    console.log(' [refreshAllTiles] Populated fileLanguages', {
       count: fileLanguages.size,
       languages: [...new Set(fileLanguages.values())]
     });
@@ -4563,12 +4583,12 @@
   let systemThemeAvailable = false;
 
   async function loadSystemTheme(){
-    console.log('🎨 [theme] Checking for system theme...');
+    console.log(' [theme] Checking for system theme...');
     try {
       const res = await fetchJSON('/api/system-theme');
       if(res.available){
         systemThemeAvailable = true;
-        console.log('🎨 [theme] Omarchy theme system detected!', res.colors);
+        console.log(' [theme] Omarchy theme system detected!', res.colors);
 
         // Show toggle button when system theme is available
         if(systemThemeToggleBtn){
@@ -4584,22 +4604,48 @@
         }
       } else {
         systemThemeAvailable = false;
-        console.log('🎨 [theme] System theme not available (not running on Omarchy)');
+        console.log(' [theme] System theme not available (not running on Omarchy)');
       }
     } catch(e){
-      console.warn('🎨 [theme] Failed to load system theme:', e);
+      console.warn(' [theme] Failed to load system theme:', e);
       systemThemeAvailable = false;
     }
   }
 
+  function hexToRgba(hex, alpha){
+    // Remove # if present
+    hex = hex.replace('#', '');
+
+    // Handle short hex (#FFF -> #FFFFFF)
+    if(hex.length === 3){
+      hex = hex.split('').map(c => c + c).join('');
+    }
+
+    const r = parseInt(hex.substring(0, 2), 16);
+    const g = parseInt(hex.substring(2, 4), 16);
+    const b = parseInt(hex.substring(4, 6), 16);
+
+    return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+  }
+
   function applySystemTheme(colors, syntaxColors, font, backgroundUrl){
-    console.log('🎨 [theme] Applying system theme:', { colors, syntaxColors, font, backgroundUrl });
+    console.log(' [theme] Applying system theme:', { colors, syntaxColors, font, backgroundUrl });
 
     // Apply CSS variables
     const root = document.documentElement;
     for(const [varName, value] of Object.entries(colors)){
       root.style.setProperty(varName, value);
     }
+
+    // Calculate dynamic accent-based colors from theme accent
+    const accentColor = colors['--accent'] || '#39bae6';
+    root.style.setProperty('--accent-subtle', hexToRgba(accentColor, 0.08));
+    root.style.setProperty('--accent-hover', hexToRgba(accentColor, 0.15));
+    root.style.setProperty('--accent-active', hexToRgba(accentColor, 0.2));
+    root.style.setProperty('--accent-bright', hexToRgba(accentColor, 0.3));
+    root.style.setProperty('--accent-border', hexToRgba(accentColor, 0.4));
+    root.style.setProperty('--accent-strong', hexToRgba(accentColor, 0.5));
+    root.style.setProperty('--accent-opaque', hexToRgba(accentColor, 0.8));
 
     // Apply font
     if(font && font.family){
@@ -4613,7 +4659,7 @@
 
     // Apply wallpaper background to workspace with dimming overlay
     if(backgroundUrl){
-      console.log('🎨 [theme] Setting workspace wallpaper:', backgroundUrl);
+      console.log(' [theme] Setting workspace wallpaper:', backgroundUrl);
       workspace.style.backgroundImage = `linear-gradient(rgba(0, 0, 0, 0.7), rgba(0, 0, 0, 0.7)), url('${backgroundUrl}')`;
       workspace.style.backgroundSize = 'cover';
       workspace.style.backgroundPosition = 'center';
@@ -4621,15 +4667,30 @@
       workspace.style.backgroundAttachment = 'fixed';
     }
 
-    showToast('🎨 System theme applied');
+    showToast(' System theme applied');
   }
 
   function applySystemFont(font){
-    console.log('🎨 [theme] Applying system font:', font);
+    console.log(' [theme] Applying system font:', font);
 
-    // Build font-family with fallbacks (strip "Nerd Font" suffix for base font)
-    const baseName = font.family.replace(/\s*Nerd\s*Font\s*/i, '').trim();
-    const fontFamily = `'${font.family}', '${baseName}', 'Cascadia Code', 'Fira Code', 'JetBrains Mono', 'Consolas', monospace`;
+    // Build mono font-family with fallbacks
+    let monoFamily = 'monospace';
+    if(font.mono_family){
+      const baseName = font.mono_family.replace(/\s*Nerd\s*Font\s*/i, '').trim();
+      monoFamily = `'${font.mono_family}', '${baseName}', 'Berkeley Mono', 'Cascadia Code', 'Fira Code', 'JetBrains Mono', 'Consolas', monospace`;
+    }
+
+    // Build sans font-family with fallbacks
+    let sansFamily = 'sans-serif';
+    if(font.sans_family){
+      const baseName = font.sans_family.replace(/\s*Nerd\s*Font\s*/i, '').trim();
+      sansFamily = `'${font.sans_family}', '${baseName}', 'Berkeley Mono', 'Inter', 'Segoe UI', 'Roboto', 'Helvetica Neue', sans-serif`;
+    }
+
+    // Apply to CSS variables
+    const root = document.documentElement;
+    root.style.setProperty('--font-mono', monoFamily);
+    root.style.setProperty('--font-sans', sansFamily);
 
     // Inject global font CSS
     let styleId = 'omarchy-font-theme';
@@ -4641,20 +4702,66 @@
       document.head.appendChild(styleEl);
     }
 
+    const monoSize = font.mono_size ? `${font.mono_size}px` : '';
+
     styleEl.textContent = `
-      /* Omarchy System Font */
+      /* Omarchy System Fonts */
+
+      /* Monospace areas: code, Monaco editor, results */
       .tile pre,
       .tile code,
       pre[class*="language-"],
-      code[class*="language-"] {
-        font-family: ${fontFamily} !important;
-        ${font.size ? `font-size: ${font.size}px !important;` : ''}
+      code[class*="language-"],
+      .result-match,
+      .result-file,
+      .status,
+      #asofLabel {
+        font-family: var(--font-mono) !important;
+        ${monoSize ? `font-size: ${monoSize} !important;` : ''}
+      }
+
+      /* Sans-serif areas: UI, buttons, headers */
+      body,
+      .btn,
+      .btn-toggle,
+      .btn-toggle-small,
+      .results-count,
+      .filter-panel-header,
+      .language-bar,
+      .add-filter-btn,
+      input[type="text"] {
+        font-family: var(--font-sans) !important;
+      }
+
+      /* Monaco editor font override */
+      .monaco-editor .view-lines {
+        font-family: var(--font-mono) !important;
+        ${monoSize ? `font-size: ${monoSize} !important;` : ''}
       }
     `;
+
+    // Update Monaco editor options if already loaded
+    if(typeof monaco !== 'undefined'){
+      const editorOptions = {
+        fontFamily: monoFamily,
+      };
+      if(font.mono_size){
+        editorOptions.fontSize = parseInt(font.mono_size);
+      }
+
+      // Update overlay editor if exists
+      if(overlayEditor){
+        overlayEditor.updateOptions(editorOptions);
+      }
+      // Update diff editor if exists
+      if(diffEditor){
+        diffEditor.updateOptions(editorOptions);
+      }
+    }
   }
 
   function applySyntaxTheme(syntaxColors, uiColors){
-    console.log('🎨 [theme] Applying syntax highlighting:', syntaxColors);
+    console.log(' [theme] Applying syntax highlighting:', syntaxColors);
 
     // Inject custom Prism.js theme overrides
     let styleId = 'omarchy-syntax-theme';
@@ -4764,14 +4871,14 @@
   let currentOmarchyTheme = null;
 
   function applyMonacoTheme(syntaxColors, uiColors){
-    console.log('🎨 [theme] Creating Monaco theme');
+    console.log(' [theme] Creating Monaco theme');
 
     // Store theme data globally
     currentOmarchyTheme = { syntax: syntaxColors, ui: uiColors };
 
     // Check if Monaco is loaded
     if(typeof monaco === 'undefined'){
-      console.log('🎨 [theme] Monaco not loaded yet, theme will be applied when Monaco loads');
+      console.log(' [theme] Monaco not loaded yet, theme will be applied when Monaco loads');
       return;
     }
 
@@ -4841,6 +4948,10 @@
           'editorLineNumber.activeForeground': '#' + accent,
           'editorIndentGuide.background': '#' + border + '40',
           'editorIndentGuide.activeBackground': '#' + border,
+          'minimap.background': '#' + bg + '00',  // Transparent to match editor
+          'minimapSlider.background': '#' + accent + '30',
+          'minimapSlider.hoverBackground': '#' + accent + '40',
+          'minimapSlider.activeBackground': '#' + accent + '50',
         }
       });
 
@@ -4852,14 +4963,14 @@
         monaco.editor.setTheme('omarchy');
       }
 
-      console.log('🎨 [theme] Monaco theme applied');
+      console.log(' [theme] Monaco theme applied');
     } catch(e){
-      console.warn('🎨 [theme] Failed to apply Monaco theme:', e);
+      console.warn(' [theme] Failed to apply Monaco theme:', e);
     }
   }
 
   function clearSystemTheme(){
-    console.log('🎨 [theme] Clearing system theme, reverting to default');
+    console.log(' [theme] Clearing system theme, reverting to default');
 
     // Clear all CSS variable overrides
     const root = document.documentElement;

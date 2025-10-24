@@ -28,6 +28,12 @@ class OmarchyThemeWatcher:
         self.walker_css = self.theme_dir / "walker.css"
         self.alacritty_toml = self.theme_dir / "alacritty.toml"
         self.background_link = Path.home() / ".config/omarchy/current/background"
+
+        # System-wide terminal configs (for font info)
+        self.alacritty_config = Path.home() / ".config/alacritty/alacritty.toml"
+        self.kitty_config = Path.home() / ".config/kitty/kitty.conf"
+        self.ghostty_config = Path.home() / ".config/ghostty/config"
+
         self.current_colors = None
         self.current_terminal_colors = None
         self.current_background = None
@@ -37,7 +43,7 @@ class OmarchyThemeWatcher:
         self.is_available = self.theme_dir.exists() and self.walker_css.exists()
 
         if self.is_available:
-            logger.info("🎨 Omarchy theme system detected")
+            logger.info(" Omarchy theme system detected")
             self.current_colors = self.parse_colors()
             self.current_terminal_colors = self.parse_terminal_colors()
             self.current_font = self.parse_font()
@@ -115,37 +121,72 @@ class OmarchyThemeWatcher:
 
     def parse_font(self) -> Optional[Dict[str, str]]:
         """
-        Parse font configuration from alacritty.toml.
+        Parse font configuration from system terminal configs.
+        Tries multiple terminal configs to find font settings.
 
         Returns:
-            Dict with 'family' and 'size' keys, or None if unavailable
+            Dict with 'mono_family', 'mono_size', 'sans_family' keys, or None if unavailable
         """
-        if not self.alacritty_toml.exists():
-            return None
+        font = {}
 
-        try:
-            import re
-            font = {}
-
-            with open(self.alacritty_toml) as f:
-                for line in f:
-                    line = line.strip()
-
-                    # Match font family: family = "Font Name" or { family = "Font Name", style = "..." }
-                    family_match = re.search(r'family\s*=\s*[\'"]([^"\']+)[\'"]', line)
+        # Try alacritty config first
+        if self.alacritty_config.exists():
+            try:
+                import re
+                with open(self.alacritty_config) as f:
+                    content = f.read()
+                    # Match: normal = { family = "Font Name" }
+                    family_match = re.search(r'normal\s*=\s*\{\s*family\s*=\s*["\']([^"\']+)["\']', content)
                     if family_match:
-                        font['family'] = family_match.group(1)
-
-                    # Match font size
-                    size_match = re.match(r'size\s*=\s*(\d+(?:\.\d+)?)', line)
+                        font['mono_family'] = family_match.group(1)
+                    # Match: size = 9
+                    size_match = re.search(r'^\s*size\s*=\s*(\d+(?:\.\d+)?)', content, re.MULTILINE)
                     if size_match:
-                        font['size'] = size_match.group(1)
+                        font['mono_size'] = size_match.group(1)
+            except Exception as e:
+                logger.warning(f"Failed to parse alacritty font: {e}")
 
-            logger.debug(f"Parsed font: {font}")
-            return font if font else None
-        except Exception as e:
-            logger.warning(f"Failed to parse font: {e}")
-            return None
+        # Try kitty config if alacritty didn't work
+        if not font.get('mono_family') and self.kitty_config.exists():
+            try:
+                import re
+                with open(self.kitty_config) as f:
+                    for line in f:
+                        # Match: font_family Berkeley Mono Variable
+                        family_match = re.match(r'^\s*font_family\s+(.+?)$', line.strip())
+                        if family_match:
+                            font['mono_family'] = family_match.group(1).strip()
+                        # Match: font_size 10.0
+                        size_match = re.match(r'^\s*font_size\s+(\d+(?:\.\d+)?)', line.strip())
+                        if size_match:
+                            font['mono_size'] = size_match.group(1)
+            except Exception as e:
+                logger.warning(f"Failed to parse kitty font: {e}")
+
+        # Try ghostty config if others didn't work
+        if not font.get('mono_family') and self.ghostty_config.exists():
+            try:
+                import re
+                with open(self.ghostty_config) as f:
+                    for line in f:
+                        # Match: font-family = "Berkeley Mono Variable"
+                        family_match = re.match(r'^\s*font-family\s*=\s*["\']([^"\']+)["\']', line.strip())
+                        if family_match:
+                            font['mono_family'] = family_match.group(1)
+                        # Match: font-size = 9
+                        size_match = re.match(r'^\s*font-size\s*=\s*(\d+(?:\.\d+)?)', line.strip())
+                        if size_match:
+                            font['mono_size'] = size_match.group(1)
+            except Exception as e:
+                logger.warning(f"Failed to parse ghostty font: {e}")
+
+        # For now, use the same font for sans-serif UI elements
+        # (Berkeley Mono Variable works well for both code and UI)
+        if font.get('mono_family'):
+            font['sans_family'] = font['mono_family']
+
+        logger.debug(f"Parsed font: {font}")
+        return font if font else None
 
     def get_background_path(self) -> Optional[str]:
         """
