@@ -1470,8 +1470,8 @@
         { token: 'operator', foreground: '8abeb7' },
       ],
       colors: {
-        'editor.background': '#090c0f',  // Match canvas background
-        'editor.foreground': '#c5c8c6',  // Tomorrow Night foreground
+        'editor.background': '#090c0f98',  // Match canvas background
+        'editor.foreground': '#c5c8c697',  // Tomorrow Night foreground
         'editor.lineHighlightBackground': '#1d1f21',
         'editor.selectionBackground': '#373b41',
         'editorCursor.foreground': '#c5c8c6',
@@ -1485,7 +1485,7 @@
       const syntaxColors = currentOmarchyTheme.syntax;
       const uiColors = currentOmarchyTheme.ui;
 
-      const bg = toMonacoColor(uiColors['--bg'] || '#0a1428');
+      const bg = toMonacoColor(uiColors['--bg'] || '#0a142877');
       const fg = toMonacoColor(uiColors['--text'] || '#f0f8ff');
       const accent = toMonacoColor(uiColors['--accent'] || '#39bae6');
       const border = toMonacoColor(uiColors['--border'] || '#44475a');
@@ -3718,11 +3718,28 @@
   function updateSparkTick(){
     if(!spark || !sparkTick){ return; }
     const W = spark.clientWidth || 600;
-    let pct = 1; // Live at far right
-    if(currentAsOfMs!=null && timelineMin!=null && timelineMax!=null && timelineMax>timelineMin){
-      pct = Math.min(1, Math.max(0, (currentAsOfMs - timelineMin) / (timelineMax - timelineMin)));
+    let x = W; // Default to far right (live)
+
+    // Position based on index in sparkKeys (filtered data), not timestamp percentage
+    // This makes the tick align with where data points actually are in the graph
+    if(currentAsOfMs!=null && sparkKeys.length > 0){
+      // Find the closest timestamp in sparkKeys to currentAsOfMs
+      let closestIdx = 0;
+      let minDiff = Math.abs(sparkKeys[0] - currentAsOfMs);
+
+      for(let i = 1; i < sparkKeys.length; i++){
+        const diff = Math.abs(sparkKeys[i] - currentAsOfMs);
+        if(diff < minDiff){
+          minDiff = diff;
+          closestIdx = i;
+        }
+      }
+
+      // Position tick at the index in the filtered data
+      const n = sparkKeys.length;
+      x = Math.round((closestIdx / (n - 1 || 1)) * W);
     }
-    const x = Math.round(W * pct);
+
     sparkTick.style.left = `${x}px`;
     try{ sparkTick.classList.remove('snap'); void sparkTick.offsetWidth; sparkTick.classList.add('snap'); }catch(e){}
   }
@@ -4304,7 +4321,7 @@
       // RESULTS-ONLY MODE: Skip loading all files on initial load
       // User must perform a search first
       if(resultsOnlyMode){
-        resultsEl.innerHTML = '<div class="results-count" style="color: #888; padding: 10px;"><strong>Results Only mode</strong><br/>Enter a search query to see matching files.<br/><br/>Tip: Click "Results Only" button to switch to "Show All" mode.</div>';
+        resultsEl.innerHTML = '<div class="results-count" style="color: #888; padding: 10px;">Enter a search query to see matching files.</div>';
         return;
       }
 
