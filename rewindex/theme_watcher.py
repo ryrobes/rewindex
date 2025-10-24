@@ -305,6 +305,7 @@ class OmarchyThemeWatcher:
         return {
             'colors': self.map_to_css_vars(colors),
             'syntax': syntax_colors,
+            'terminal_colors': term_colors,  # Raw ANSI colors for language palette
             'font': font,
             'background': self.current_background or self.get_background_path(),
             'background_hash': self.current_background_hash or self._hash_background(),

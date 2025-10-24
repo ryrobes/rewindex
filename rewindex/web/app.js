@@ -70,6 +70,8 @@
   let currentLanguageFilter = null; // Currently active language filter (e.g., "python", "javascript")
   let languageColors = {}; // Map of language -> color
   let languageList = []; // Ordered list of discovered languages
+  let currentThemeColors = null; // Current theme colors (for gradient generation)
+  let currentTerminalColors = null; // Current terminal ANSI colors (for spectrum palette)
   let recentUpdates = []; // Track recent file updates [{path, action, timestamp}]
   const MAX_RECENT_UPDATES = 20;
   let overlayEditor = null; // Monaco editor instance for overlay
@@ -1857,15 +1859,197 @@
     return tile;
   }
 
-  function generatePastelColor(index, total){
-    // Generate evenly distributed pastel colors using HSL
-    // Hue: spread across color wheel
-    // Saturation: 65-75% for soft pastels
-    // Lightness: 65-75% for pastels
+  // ========== Color Utilities for Theme-Aware Gradient ==========
+
+  function hexToRgb(hex){
+    // Remove # if present and handle rgba strings
+    if(hex.startsWith('rgba(')){
+      const match = hex.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/);
+      if(match){
+        return { r: parseInt(match[1]), g: parseInt(match[2]), b: parseInt(match[3]) };
+      }
+    }
+    hex = hex.replace('#', '');
+    if(hex.length === 3){
+      hex = hex.split('').map(c => c + c).join('');
+    }
+    return {
+      r: parseInt(hex.substring(0, 2), 16),
+      g: parseInt(hex.substring(2, 4), 16),
+      b: parseInt(hex.substring(4, 6), 16)
+    };
+  }
+
+  function rgbToHex(r, g, b){
+    return '#' + [r, g, b].map(x => {
+      const hex = Math.round(Math.max(0, Math.min(255, x))).toString(16);
+      return hex.length === 1 ? '0' + hex : hex;
+    }).join('');
+  }
+
+  function rgbToHsl(r, g, b){
+    r /= 255;
+    g /= 255;
+    b /= 255;
+    const max = Math.max(r, g, b);
+    const min = Math.min(r, g, b);
+    let h, s, l = (max + min) / 2;
+
+    if(max === min){
+      h = s = 0; // achromatic
+    } else {
+      const d = max - min;
+      s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+      switch(max){
+        case r: h = ((g - b) / d + (g < b ? 6 : 0)) / 6; break;
+        case g: h = ((b - r) / d + 2) / 6; break;
+        case b: h = ((r - g) / d + 4) / 6; break;
+      }
+    }
+
+    return { h: h * 360, s: s * 100, l: l * 100 };
+  }
+
+  function hslToRgb(h, s, l){
+    h /= 360;
+    s /= 100;
+    l /= 100;
+    let r, g, b;
+
+    if(s === 0){
+      r = g = b = l; // achromatic
+    } else {
+      const hue2rgb = (p, q, t) => {
+        if(t < 0) t += 1;
+        if(t > 1) t -= 1;
+        if(t < 1/6) return p + (q - p) * 6 * t;
+        if(t < 1/2) return q;
+        if(t < 2/3) return p + (q - p) * (2/3 - t) * 6;
+        return p;
+      };
+
+      const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+      const p = 2 * l - q;
+      r = hue2rgb(p, q, h + 1/3);
+      g = hue2rgb(p, q, h);
+      b = hue2rgb(p, q, h - 1/3);
+    }
+
+    return { r: Math.round(r * 255), g: Math.round(g * 255), b: Math.round(b * 255) };
+  }
+
+  function hslToHex(h, s, l){
+    const rgb = hslToRgb(h, s, l);
+    return rgbToHex(rgb.r, rgb.g, rgb.b);
+  }
+
+  function interpolateColor(color1, color2, ratio){
+    const rgb1 = hexToRgb(color1);
+    const rgb2 = hexToRgb(color2);
+    const r = rgb1.r + (rgb2.r - rgb1.r) * ratio;
+    const g = rgb1.g + (rgb2.g - rgb1.g) * ratio;
+    const b = rgb1.b + (rgb2.b - rgb1.b) * ratio;
+    return rgbToHex(r, g, b);
+  }
+
+  function generateTetradPalette(accentColor){
+    // Generate tetrad color scheme (4 colors evenly spaced on color wheel)
+    const rgb = hexToRgb(accentColor);
+    const hsl = rgbToHsl(rgb.r, rgb.g, rgb.b);
+
+    // Keep saturation high and lightness moderate for vibrant colors
+    const saturation = Math.max(60, hsl.s); // Boost saturation if needed
+    const lightness = 55; // Consistent lightness for even vibrancy
+
+    // Tetrad: base, +90°, +180°, +270°
+    const tetrad = [
+      hslToHex(hsl.h, saturation, lightness),                    // Base (accent)
+      hslToHex((hsl.h + 90) % 360, saturation, lightness),       // +90° (complementary split 1)
+      hslToHex((hsl.h + 180) % 360, saturation, lightness),      // +180° (direct complement)
+      hslToHex((hsl.h + 270) % 360, saturation, lightness),      // +270° (complementary split 2)
+    ];
+
+    return tetrad;
+  }
+
+  function generateThemeGradient(index, total){
+    // Strategy 1: Tetrad palette from accent color (vibrant heatmap)
+    if(currentThemeColors && currentThemeColors['--accent']){
+      const accentColor = currentThemeColors['--accent'];
+      const tetrad = generateTetradPalette(accentColor);
+
+      if(index === 0){
+        console.log('🎨 [gradient] Using tetrad heatmap palette from accent:', accentColor);
+        console.log('   Tetrad colors:', tetrad);
+        // Visual debug: show color swatches in console (modern browsers)
+        tetrad.forEach((color, i) => {
+          console.log(`   %c ${i}: ${color} `, `background: ${color}; color: white; padding: 2px 8px; font-weight: bold;`);
+        });
+      }
+
+      // Map index across the 4 tetrad colors
+      const position = (index / Math.max(1, total - 1)) * (tetrad.length - 1);
+      const lower = Math.floor(position);
+      const upper = Math.min(tetrad.length - 1, Math.ceil(position));
+      const ratio = position - lower;
+
+      if(lower === upper){
+        return tetrad[lower];
+      }
+      return interpolateColor(tetrad[lower], tetrad[upper], ratio);
+    }
+
+    // Strategy 2: Use terminal ANSI colors if available
+    if(currentTerminalColors && currentTerminalColors.normal){
+      const normal = currentTerminalColors.normal;
+      const bright = currentTerminalColors.bright || {};
+
+      // Order colors by hue for spectrum effect: blue->cyan->green->yellow->orange->red->magenta
+      const spectrum = [
+        normal.blue,
+        bright.blue || normal.cyan,
+        normal.cyan,
+        bright.cyan || normal.green,
+        normal.green,
+        bright.green || normal.yellow,
+        normal.yellow,
+        bright.yellow || normal.red,
+        normal.red,
+        bright.red || normal.magenta,
+        normal.magenta,
+        bright.magenta || normal.blue,
+      ].filter(c => c); // Remove undefined colors
+
+      if(spectrum.length > 0){
+        if(index === 0){
+          console.log('🎨 [gradient] Using terminal ANSI color spectrum:', spectrum);
+        }
+        // Map index to spectrum position
+        const position = (index / Math.max(1, total - 1)) * (spectrum.length - 1);
+        const lower = Math.floor(position);
+        const upper = Math.min(spectrum.length - 1, Math.ceil(position));
+        const ratio = position - lower;
+
+        if(lower === upper){
+          return spectrum[lower];
+        }
+        return interpolateColor(spectrum[lower], spectrum[upper], ratio);
+      }
+    }
+
+    // Strategy 3: Fallback to vibrant rainbow (enhanced pastel)
+    if(index === 0){
+      console.log('🎨 [gradient] Using fallback vibrant rainbow');
+    }
     const hue = (index * 360 / total) % 360;
-    const saturation = 65 + (index % 3) * 5; // Vary between 65-75%
-    const lightness = 65 + (index % 2) * 5;  // Vary between 65-75%
+    const saturation = 70; // Boosted saturation for more vibrant colors
+    const lightness = 55;  // Moderate lightness for better vibrancy
     return `hsl(${hue}, ${saturation}%, ${lightness}%)`;
+  }
+
+  function generatePastelColor(index, total){
+    // Legacy function - now redirects to theme-aware gradient
+    return generateThemeGradient(index, total);
   }
 
   function getLanguageColor(language){
@@ -3559,7 +3743,7 @@
         console.log(' [theme] Received theme update via SSE:', theme);
 
         if(systemThemeEnabled && theme.colors){
-          applySystemTheme(theme.colors, theme.syntax || {}, theme.font || {}, theme.background_url || theme.background);
+          applySystemTheme(theme.colors, theme.syntax || {}, theme.font || {}, theme.background_url || theme.background, theme.terminal_colors);
         }
       }catch(e){
         console.error(' [theme] Error processing theme update:', e);
@@ -4654,7 +4838,7 @@
         }
 
         if(systemThemeEnabled){
-          applySystemTheme(res.colors, res.syntax, res.font, res.background_url);
+          applySystemTheme(res.colors, res.syntax, res.font, res.background_url, res.terminal_colors);
         }
       } else {
         systemThemeAvailable = false;
@@ -4682,8 +4866,12 @@
     return `rgba(${r}, ${g}, ${b}, ${alpha})`;
   }
 
-  function applySystemTheme(colors, syntaxColors, font, backgroundUrl){
-    console.log(' [theme] Applying system theme:', { colors, syntaxColors, font, backgroundUrl });
+  function applySystemTheme(colors, syntaxColors, font, backgroundUrl, terminalColors){
+    console.log(' [theme] Applying system theme:', { colors, syntaxColors, font, backgroundUrl, terminalColors });
+
+    // Store theme colors for gradient generation
+    currentThemeColors = colors;
+    currentTerminalColors = terminalColors;
 
     // Apply CSS variables
     const root = document.documentElement;
@@ -4720,6 +4908,14 @@
       workspace.style.backgroundRepeat = 'no-repeat';
       workspace.style.backgroundAttachment = 'fixed';
     }
+
+    // Regenerate language colors with new theme gradient
+    console.log('🎨 [theme] Regenerating language colors with theme gradient...');
+    languageColors = {}; // Clear existing colors
+    languageList.forEach((lang, idx) => {
+      languageColors[lang] = generateThemeGradient(idx, languageList.length);
+    });
+    updateLanguageBar(); // Refresh language bar with new colors
 
     showToast(' System theme applied');
   }
