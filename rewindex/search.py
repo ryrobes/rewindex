@@ -230,6 +230,7 @@ def simple_search_es(
             "is_current": src.get("is_current", True),
             "metadata": {
                 "size_bytes": src.get("size_bytes"),
+                "line_count": src.get("line_count"),
                 "functions": src.get("defined_functions", []),
                 "classes": src.get("defined_classes", []),
                 "imports": src.get("imports", []),

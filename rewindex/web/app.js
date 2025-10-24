@@ -13,7 +13,7 @@
   const resultsOnlyBtn = document.getElementById('resultsOnly');
   const treemapModeBtn = document.getElementById('treemapMode');
   const treemapFoldersBtn = document.getElementById('treemapFolders');
-  const sizeByBytesBtn = document.getElementById('sizeByBytes');
+  // const sizeByBytesBtn = document.getElementById('sizeByBytes'); // Removed - always use bytes
   const followCliBtn = document.getElementById('followCli');
   const followUpdatesBtn = document.getElementById('followUpdates');
   const dynTextBtn = document.getElementById('dynText');
@@ -60,7 +60,7 @@
   let followUpdatesMode = false;
   let treemapMode = false;
   let treemapFoldersMode = false;
-  let sizeByBytes = false;
+  const sizeByBytes = true; // Always use bytes for treemap sizing
   let fuzzyMode = false;
   let partialMode = false;
   let deletedMode = false;
@@ -2689,13 +2689,18 @@
     // DEBUG: Log size distribution
     if(items.length > 0){
       const sizes = items.map(i => i.size);
-      console.log('Treemap size stats:', {
+      console.log('📊 [Treemap] Size stats:', {
         min: Math.min(...sizes),
         max: Math.max(...sizes),
         avg: totalSize / items.length,
         total: totalSize,
         count: items.length,
-        samples: items.slice(0, 5).map(i => ({path: i.path, size: i.size}))
+        sizeBy: sizeByBytes ? 'bytes' : 'lines',
+        samples: items.slice(0, 5).map(i => ({
+          path: i.path.split('/').pop(),
+          size: i.size,
+          meta: fileMeta.get(i.path)
+        }))
       });
     }
 
@@ -3365,7 +3370,6 @@
 
       // Show/hide sub-toggles
       if(treemapFoldersBtn) treemapFoldersBtn.style.display = treemapMode ? 'inline-block' : 'none';
-      if(sizeByBytesBtn) sizeByBytesBtn.style.display = treemapMode ? 'inline-block' : 'none';
 
       if(treemapMode){
         showToast('Treemap mode enabled');
@@ -3373,12 +3377,37 @@
         showToast('Treemap mode disabled');
         // Reset sub-toggles when disabled
         treemapFoldersMode = false;
-        sizeByBytes = false;
         if(treemapFoldersBtn) treemapFoldersBtn.classList.remove('active');
-        if(sizeByBytesBtn) sizeByBytesBtn.classList.remove('active');
       }
+
       // Re-layout with current file set
       await refreshAllTiles(currentAsOfMs);
+
+      // Auto-load content for all visible tiles in treemap mode
+      if(treemapMode){
+        console.log('📊 [Treemap] Auto-loading content for all tiles...');
+        const tilePaths = Array.from(tiles.keys());
+
+        // Load in batches to avoid overwhelming the browser
+        const batchSize = 20;
+        for(let i = 0; i < tilePaths.length; i += batchSize){
+          const batch = tilePaths.slice(i, i + batchSize);
+          await Promise.all(batch.map(async path => {
+            if(!tileContent.has(path)){
+              try{
+                await loadTileContent(path);
+              }catch(e){
+                console.error('Failed to load tile content:', path, e);
+              }
+            }
+          }));
+          // Small delay between batches
+          if(i + batchSize < tilePaths.length){
+            await new Promise(resolve => setTimeout(resolve, 100));
+          }
+        }
+        console.log('✅ [Treemap] All tiles loaded');
+      }
     };
   }
 
@@ -3390,19 +3419,36 @@
       showToast(treemapFoldersMode ? 'Showing folders' : 'Flat treemap');
       // Re-layout with current file set
       await refreshAllTiles(currentAsOfMs);
+
+      // Auto-load content for all visible tiles when folders mode is enabled
+      if(treemapFoldersMode && treemapMode){
+        console.log('📊 [Treemap Folders] Auto-loading content for all tiles...');
+        const tilePaths = Array.from(tiles.keys());
+
+        // Load in batches to avoid overwhelming the browser
+        const batchSize = 20;
+        for(let i = 0; i < tilePaths.length; i += batchSize){
+          const batch = tilePaths.slice(i, i + batchSize);
+          await Promise.all(batch.map(async path => {
+            if(!tileContent.has(path)){
+              try{
+                await loadTileContent(path);
+              }catch(e){
+                console.error('Failed to load tile content:', path, e);
+              }
+            }
+          }));
+          // Small delay between batches
+          if(i + batchSize < tilePaths.length){
+            await new Promise(resolve => setTimeout(resolve, 100));
+          }
+        }
+        console.log('✅ [Treemap Folders] All tiles loaded');
+      }
     };
   }
 
-  // Size by Bytes sub-toggle
-  if(sizeByBytesBtn){
-    sizeByBytesBtn.onclick = async ()=>{
-      sizeByBytes = !sizeByBytes;
-      sizeByBytesBtn.classList.toggle('active', sizeByBytes);
-      showToast(sizeByBytes ? 'Sizing by bytes' : 'Sizing by lines');
-      // Re-layout with current file set
-      await refreshAllTiles(currentAsOfMs);
-    };
-  }
+  // Size by Bytes toggle removed - now always uses bytes (const sizeByBytes = true)
 
   // startWatch.onclick = async ()=>{
   //   try{
@@ -3803,11 +3849,11 @@
       list = limitedResults.map(r => r.file_path);
 
       // Fetch metadata for these specific files
-      // NOTE: This is a lightweight approach - we'll fetch content during tile loading
+      // NOTE: Metadata is in the nested metadata object from search results
       filesWithMeta = limitedResults.map(r => ({
         file_path: r.file_path,
-        size_bytes: r.size_bytes || 0,
-        line_count: r.line_count || 1,
+        size_bytes: (r.metadata && r.metadata.size_bytes) || 0,
+        line_count: (r.metadata && r.metadata.line_count) || 1,
         language: r.language || 'text'
       }));
     }
@@ -3843,6 +3889,14 @@
         }
       }
     }
+
+    console.log('📊 [refreshAllTiles] fileMeta populated:', {
+      count: fileMeta.size,
+      samples: Array.from(fileMeta.entries()).slice(0, 3).map(([path, meta]) => ({
+        path: path.split('/').pop(),
+        ...meta
+      }))
+    });
 
     console.log(' [refreshAllTiles] Populated fileLanguages', {
       count: fileLanguages.size,
