@@ -29,7 +29,7 @@ body {
   height: 100%;
   background: var(--bg);
   color: var(--text);
-  font-family: 'Fira Code', Inter, system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Noto Sans, Helvetica Neue, Arial, sans-serif;
+  font-family: var(--font-mono), 'Fira Code', Inter, system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Noto Sans, Helvetica Neue, Arial, sans-serif;
 }
 
 /* Dark scrollbar styling */
@@ -180,7 +180,7 @@ body {
   width: 100%;
   padding: 8px 10px;
   font-size: 13px;
-  font-family: 'Fira Code', monospace;
+  font-family: var(--font-mono), 'Fira Code', monospace;
   color: var(--text);
   background: rgba(0, 0, 0, 0.3);
   border: 1px solid var(--border);
@@ -209,7 +209,7 @@ body {
 .filter-option-btn {
   padding: 4px 10px;
   font-size: 12px;
-  font-family: 'Fira Code', monospace;
+  font-family: var(--font-mono), 'Fira Code', monospace;
   color: var(--muted);
   background: rgba(0, 0, 0, 0.3);
   border: 1px solid var(--border);
@@ -340,7 +340,7 @@ body {
   
   padding: 8px 14px;
   font-size: 20px;
-  font-family: 'Fira Code', monospace;
+  font-family: var(--font-mono), 'Fira Code', monospace;
   font-weight: 600;
   color: var(--text);
   outline: none;
@@ -632,7 +632,7 @@ body {
   font-size: 11px;
   background: transparent;
   color: var(--muted);
-  border: 1px solid var(--border);
+  /* border: 1px solid var(--border); */
   box-shadow: none;
 }
 
@@ -989,6 +989,24 @@ body {
   margin-top: 0;
 }
 
+.chunk-indicator {
+  /* background: rgba(92, 106, 114, 0.25); */
+  color: var(--text);
+  opacity: 0.45;
+  display: none;
+  position:absolute; 
+  top:0; right:0; 
+  margin-top: -7px;
+  margin-right: 10px;
+  padding:2px 6px; 
+  font-size:8px; 
+  /* background:rgba(0,0,0,0.5); 
+  color:#888;  */
+  /* border-radius: 0px, 0px, 0px, 10px; */
+  z-index:10; 
+  pointer-events:none;
+}
+
 .btn-toggle {
   flex: 1;
   padding: 8px 12px;
@@ -1313,7 +1331,8 @@ body {
 }
 
 .tile.deleted .title {
-  background: rgba(255, 85, 85, 0.1);
+  /* background: rgba(255, 85, 85, 0.1); */
+  background: var(--accent-subtle); 
   border-bottom-color: rgba(255, 85, 85, 0.3);
 }
 
@@ -1326,7 +1345,9 @@ body {
   position: absolute;
   width: 600px;
   height: 400px;
-  background: #0b0e1499;
+  user-select: none;
+  /* background: #0b0e14; */
+  background: var(--bg) + '99';
   backdrop-filter: blur(8px);
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -1408,7 +1429,7 @@ body {
   color: #000;
   font-size: 11px;
   font-weight: 700;
-  font-family: 'Fira Code', monospace;
+  font-family: var(--font-mono), 'Fira Code', monospace;
   border-radius: 12px;
   z-index: 10;
   display: flex;
@@ -1467,8 +1488,9 @@ body {
 
 .tile .title {
   padding: 8px;
-  background: #0f1419;
-  border-bottom: 1px solid var(--border);
+  /* background: #0f1419; */
+  background: var(--accent-subtle); 
+  /* border-bottom: 1px solid var(--border); */
   font-size: 12px;
   color: var(--muted);
   display: flex;
@@ -1508,7 +1530,7 @@ body {
 }
 
 .pre {
-  font-family: 'Fira Code', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, Liberation Mono, monospace;
+  font-family: var(--font-mono), 'Fira Code', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, Liberation Mono, monospace;
   white-space: pre;
   overflow: auto;
   font-size: 12px;
@@ -1516,9 +1538,10 @@ body {
 }
 
 .prism-code {
-  font-family: 'Fira Code', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, Liberation Mono, monospace;
+  font-family: var(--font-mono), 'Fira Code', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, Liberation Mono, monospace;
   white-space: pre;
   overflow: auto;
+  user-select: none;
   font-size: 12px;
   padding: 8px;
   margin: 0;
@@ -1527,7 +1550,7 @@ body {
 }
 
 .prism-code code {
-  font-family: 'Fira Code', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, Liberation Mono, monospace;
+  font-family: var(--font-mono), 'Fira Code', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, Liberation Mono, monospace;
   background: transparent !important;
   color: #b3b1ad;
 }
@@ -1602,7 +1625,7 @@ body {
 
 .overlay-header {
   background: var(--panel);
-  border-bottom: 1px solid var(--border);
+  /* border-bottom: 1px solid var(--border); */
   padding: 12px 24px;
   display: flex;
   justify-content: space-between;
@@ -1611,10 +1634,11 @@ body {
 }
 
 .overlay-file-path {
-  font-size: 14px;
+  font-size: 18px;
+  font-weight: 700;
   color: var(--accent);
   font-weight: 600;
-  font-family: 'Fira Code', monospace;
+  font-family: var(--font-mono), 'Fira Code', monospace;
 }
 
 .overlay-controls {
@@ -1754,11 +1778,13 @@ body {
   font-size: 10px;
   background: var(--accent-hover);
   color: var(--accent);
-  border: 1px solid var(--accent-active);
-  border-radius: 4px;
+  /* border: 1px solid var(--accent-active); */
+  /* border-radius: 4px; */
   cursor: pointer;
   box-shadow: none;
-  opacity: 0.7;
+  border: none;
+  outline: none;
+  /* opacity: 0.7; */
   transition: opacity 0.2s ease;
 }
 
@@ -1996,7 +2022,7 @@ body {
   font-size: 10px;
   font-weight: 700;
   color: var(--muted);
-  font-family: 'Fira Code', monospace;
+  font-family: var(--font-mono), 'Fira Code', monospace;
 }
 
 .beads-ticket-badges {
@@ -2091,7 +2117,7 @@ body {
   cursor: pointer;
   font-size: 16px;
   font-weight: 700;
-  font-family: 'Fira Code', monospace;
+  font-family: var(--font-mono), 'Fira Code', monospace;
   text-align: center;
   z-index: 99;
   transition: all 0.2s ease;
@@ -2179,7 +2205,7 @@ body {
   width: 100%;
   padding: 10px 12px;
   font-size: 14px;
-  font-family: 'Fira Code', monospace;
+  font-family: var(--font-mono), 'Fira Code', monospace;
   color: var(--text);
   background: rgba(0, 0, 0, 0.3);
   border: 1px solid var(--border);
@@ -2207,7 +2233,7 @@ body {
 .search-option-btn {
   padding: 6px 12px;
   font-size: 14px;
-  font-family: 'Fira Code', monospace;
+  font-family: var(--font-mono), 'Fira Code', monospace;
   color: var(--muted);
   background: rgba(0, 0, 0, 0.3);
   border: 1px solid var(--border);

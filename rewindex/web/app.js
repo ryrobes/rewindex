@@ -2532,7 +2532,7 @@
       const indicator = document.createElement('div');
       indicator.className = 'chunk-indicator';
       indicator.textContent = `Showing lines ${startLine}-${endLine} of ${totalLines}`;
-      indicator.style.cssText = 'position:absolute; top:0; right:0; padding:2px 6px; font-size:9px; background:rgba(0,0,0,0.5); color:#888; z-index:10; pointer-events:none;';
+      //indicator.style.cssText = '';
       body.style.position = 'relative';
       body.appendChild(indicator);
     }
