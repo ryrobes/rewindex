@@ -7,6 +7,9 @@
   const qEl = document.getElementById('q');
   const searchContainer = qEl.parentElement;
   const clearSearchBtn = document.getElementById('clearSearch');
+  const pathFilterToggleBtn = document.getElementById('pathFilterToggle');
+  const pathFilterContainer = document.getElementById('pathFilterContainer');
+  const pathFilterInput = document.getElementById('pathFilter');
   const deletedToggleBtn = document.getElementById('deletedToggle');
   const partialToggleBtn = document.getElementById('partialToggle');
   const fuzzyToggleBtn = document.getElementById('fuzzyToggle');
@@ -381,9 +384,30 @@
       return;
     }
 
+    // Build filters object
+    const filters = currentAsOfMs ? { as_of_ms: currentAsOfMs } : {};
+
+    // Add path prefix filter if specified
+    const pathPrefix = pathFilterInput?.value?.trim();
+    if(pathPrefix){
+      filters.path_prefix = pathPrefix;
+      console.log('🔍 [doSearch] Path prefix filter:', pathPrefix);
+      console.log('   Full filters object:', filters);
+
+      // Visual indicator for active path filter
+      if(pathFilterToggleBtn){
+        pathFilterToggleBtn.style.borderBottom = '2px solid var(--accent)';
+      }
+    } else {
+      // Remove visual indicator when no filter
+      if(pathFilterToggleBtn){
+        pathFilterToggleBtn.style.borderBottom = 'none';
+      }
+    }
+
     const body = {
       query: qEl.value,
-      filters: currentAsOfMs ? { as_of_ms: currentAsOfMs } : {},
+      filters: filters,
       options: {
         limit: 200,
         context_lines: 2,
@@ -393,8 +417,21 @@
         show_deleted: deletedMode
       }
     };
+
+    // Debug: log the request payload
+    console.log('📤 [doSearch] Request payload:', JSON.stringify(body, null, 2));
+
     const res = await fetchJSON('/search/simple', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
     const results = res.results || [];
+
+    console.log(`📊 [doSearch] Received ${results.length} results (total: ${res.total || 0})`);
+    if(pathPrefix){
+      console.log(`   ℹ️  With path filter: "${pathPrefix}"`);
+      if(results.length > 0){
+        console.log(`   First result path: ${results[0].file_path}`);
+        console.log(`   Does it start with "${pathPrefix}"? ${results[0].file_path.startsWith(pathPrefix)}`);
+      }
+    }
 
     // Hide spinner
     if(spinner) spinner.style.display = 'none';
@@ -447,10 +484,10 @@
     resultsEl.innerHTML = '';
 
     // DEBUG: Log raw results BEFORE grouping
-    console.log('🔍 [renderResults] Raw results from API:', results.length);
+    // console.log('🔍 [renderResults] Raw results from API:', results.length);
 
     // Print full structure of first 5 results
-    console.log('🔍 [renderResults] First 5 results structure:');
+    // console.log('🔍 [renderResults] First 5 results structure:');
     results.slice(0, 5).forEach((r, idx) => {
       console.log(`\n--- Result ${idx + 1} ---`);
       console.log('file_path:', r.file_path);
@@ -476,15 +513,15 @@
     results.forEach(r => {
       filePathCounts.set(r.file_path, (filePathCounts.get(r.file_path) || 0) + 1);
     });
-    console.log('\n🔍 [renderResults] Files appearing multiple times in results array:',
-      Array.from(filePathCounts.entries())
-        .filter(([path, count]) => count > 1)
-        .map(([path, count]) => `${path.substring(path.lastIndexOf('/') + 1)}: ${count} times`)
-    );
+    // console.log('\n🔍 [renderResults] Files appearing multiple times in results array:',
+    //   Array.from(filePathCounts.entries())
+    //     .filter(([path, count]) => count > 1)
+    //     .map(([path, count]) => `${path.substring(path.lastIndexOf('/') + 1)}: ${count} times`)
+    // );
 
     // Check if ANY results have multiple matches within them
     const multiMatchFiles = results.filter(r => r.matches && r.matches.length > 1);
-    console.log('\n🔍 [renderResults] Files with multiple matches within one result:', multiMatchFiles.length);
+    // console.log('\n🔍 [renderResults] Files with multiple matches within one result:', multiMatchFiles.length);
     if(multiMatchFiles.length > 0){
       console.log('Examples:');
       multiMatchFiles.slice(0, 3).forEach(r => {
@@ -667,19 +704,19 @@
       matchesContainer.className = 'result-matches';
 
       // DEBUG: Log what we're rendering
-      console.log(`📊 [renderResults] File: ${fileGroup.file_path.substring(fileGroup.file_path.lastIndexOf('/') + 1)}`, {
-        resultSets: fileGroup.resultSets.length,
-        totalMatches: fileGroup.totalMatches
-      });
+      // console.log(`📊 [renderResults] File: ${fileGroup.file_path.substring(fileGroup.file_path.lastIndexOf('/') + 1)}`, {
+      //   resultSets: fileGroup.resultSets.length,
+      //   totalMatches: fileGroup.totalMatches
+      // });
 
       fileGroup.resultSets.forEach((resultSet, setIdx) => {
         const matches = resultSet.matches || [];
         const totalOccurrences = matches.reduce((sum, m) => sum + (m.match_count || 1), 0);
-        console.log(`  └─ Result set ${setIdx + 1}:`, {
-          matches: matches.length,
-          total_occurrences: totalOccurrences,
-          score: resultSet.score_pct || Math.round(resultSet.score || 0)
-        });
+        // console.log(`  └─ Result set ${setIdx + 1}:`, {
+        //   matches: matches.length,
+        //   total_occurrences: totalOccurrences,
+        //   score: resultSet.score_pct || Math.round(resultSet.score || 0)
+        // });
 
         matches.forEach((m, matchIdx)=>{
           const item = document.createElement('div');
@@ -2283,9 +2320,9 @@
       }
       return line;
     });
-    if(truncatedCount > 0){
-      console.warn(`⚠️  [loadTileContent] Truncated ${truncatedCount} long lines in ${path.substring(path.lastIndexOf('/') + 1)}`);
-    }
+    // if(truncatedCount > 0){
+    //   console.warn(`⚠️  [loadTileContent] Truncated ${truncatedCount} long lines in ${path.substring(path.lastIndexOf('/') + 1)}`);
+    // }
     const totalLines = lines.length;
 
     // CHUNKED RENDERING: Calculate chunk size based on tile height and dynamic font size
@@ -3202,6 +3239,44 @@
       qEl.value = '';
       doSearch(); // Will show recent updates since query is empty
     };
+  }
+
+  // Path filter toggle
+  if(pathFilterToggleBtn && pathFilterContainer && pathFilterInput){
+    pathFilterToggleBtn.onclick = ()=>{
+      const isExpanded = pathFilterContainer.style.display !== 'none';
+      if(isExpanded){
+        // Collapse
+        pathFilterContainer.style.display = 'none';
+        pathFilterToggleBtn.classList.remove('active');
+      } else {
+        // Expand
+        pathFilterContainer.style.display = 'block';
+        pathFilterToggleBtn.classList.add('active');
+        // Focus the input after a short delay (allows animation to start)
+        setTimeout(() => pathFilterInput.focus(), 100);
+      }
+    };
+
+    // Re-search when path filter changes
+    pathFilterInput.addEventListener('input', ()=>{
+      if(searchTimer) clearTimeout(searchTimer);
+      searchTimer = setTimeout(()=> {
+        if(qEl.value.trim()){
+          doSearch(); // Re-run search with new path filter
+        }
+      }, 300);
+    });
+
+    // Handle Enter key in path filter input
+    pathFilterInput.addEventListener('keydown', (e)=>{
+      if(e.key === 'Enter'){
+        e.preventDefault();
+        if(qEl.value.trim()){
+          doSearch();
+        }
+      }
+    });
   }
 
   // Deleted files toggle

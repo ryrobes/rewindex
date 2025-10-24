@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Dict
@@ -13,6 +14,8 @@ from .search import SearchFilters, SearchOptions, simple_search_es
 from .es import ESClient, ensure_indices
 from .indexing import watch, poll_watch
 from .theme_watcher import OmarchyThemeWatcher
+
+logger = logging.getLogger(__name__)
 
 
 class EventBroker:
@@ -545,6 +548,12 @@ class RewindexHandler(BaseHTTPRequestHandler):
                 query = payload.get("query", "")
                 filters = payload.get("filters", {})
                 options = payload.get("options", {})
+
+                # Debug logging
+                if filters.get("path_prefix"):
+                    logger.info(f"🔍 Received path_prefix filter: {filters.get('path_prefix')}")
+                    logger.info(f"   Full filters dict: {filters}")
+
                 es = ESClient(cfg.elasticsearch.host)
                 idx = ensure_indices(es, cfg.resolved_index_prefix())
                 as_of_ms = filters.get("as_of_ms") or filters.get("created_before_ms")
@@ -556,6 +565,7 @@ class RewindexHandler(BaseHTTPRequestHandler):
                     SearchFilters(
                         language=filters.get("language"),
                         path_pattern=filters.get("path_pattern"),
+                        path_prefix=filters.get("path_prefix"),
                         file_types=filters.get("file_types"),
                         exclude_paths=None,
                         modified_after=None,
@@ -578,6 +588,9 @@ class RewindexHandler(BaseHTTPRequestHandler):
                 _json_response(self, 503, {"error": f"Cannot reach Elasticsearch at {cfg.elasticsearch.host}"})
                 return
             except Exception as e:  # pragma: no cover
+                import traceback
+                logger.error(f"❌ Error in /search/simple: {str(e)}")
+                logger.error(traceback.format_exc())
                 _json_response(self, 400, {"error": str(e)})
             return
 

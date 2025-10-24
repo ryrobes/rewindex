@@ -11,6 +11,7 @@ from .es import ESClient
 class SearchFilters:
     language: Optional[List[str]] = None
     path_pattern: Optional[str] = None
+    path_prefix: Optional[str] = None  # Filter by path prefix (e.g., "repos/my-project")
     file_types: Optional[List[str]] = None
     exclude_paths: Optional[str] = None
     modified_after: Optional[float] = None
@@ -95,6 +96,12 @@ def simple_search_es(
         # Convert ** to * for ES wildcard
         pat = filters.path_pattern.replace("**", "*")
         filter_clauses.append({"wildcard": {"file_path": pat}})
+    if filters.path_prefix:
+        # Efficient prefix matching (e.g., "repos/my-project")
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.info(f"🔍 Applying path_prefix filter: {filters.path_prefix}")
+        filter_clauses.append({"prefix": {"file_path": filters.path_prefix}})
     if filters.file_paths:
         # Restrict to specific file paths (for cascading filters)
         filter_clauses.append({"terms": {"file_path": filters.file_paths}})
@@ -131,6 +138,13 @@ def simple_search_es(
         },
     }
 
+    # Debug logging
+    import logging
+    logger = logging.getLogger(__name__)
+    if filters.path_prefix:
+        import json
+        logger.info(f"🔍 Elasticsearch query with path_prefix filter:\n{json.dumps(body, indent=2)}")
+
     if options.highlight:
         body["highlight"] = {
             "pre_tags": ["<mark>"],
@@ -146,6 +160,14 @@ def simple_search_es(
 
     res = es.search(index, body)
     hits = res.get("hits", {}).get("hits", [])
+
+    # Debug: Log result count
+    import logging
+    logger = logging.getLogger(__name__)
+    logger.info(f"📊 Elasticsearch returned {len(hits)} hits (total: {res.get('hits', {}).get('total', {}).get('value', 0)})")
+    if filters.path_prefix and len(hits) > 0:
+        logger.info(f"   First hit path: {hits[0].get('_source', {}).get('file_path', 'unknown')}")
+
     results: List[Dict[str, Any]] = []
 
     # DEBUG: Track highlight fragment statistics

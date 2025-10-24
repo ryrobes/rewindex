@@ -73,9 +73,17 @@
     <div class="search-container">
       <button id="clearSearch" class="clear-search" title="Clear search">×</button>
       <input id="q" class="floating-search" type="text" placeholder="Search codebase…" />
+      <button id="pathFilterToggle" class="path-filter-toggle" title="Filter by path prefix">
+        <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor">
+          <path d="M2 3 L6 7 L10 3" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </button>
       <button id="deletedToggle" class="deleted-toggle" title="Show deleted files">🗑</button>
       <button id="partialToggle" class="partial-toggle" title="Toggle partial match">*</button>
       <button id="fuzzyToggle" class="fuzzy-toggle" title="Toggle fuzzy search">~</button>
+      <div id="pathFilterContainer" class="path-filter-container" style="display:none;">
+        <input id="pathFilter" class="path-filter-input" type="text" placeholder="e.g., repos/rewindex or repos/" />
+      </div>
     </div>
     <div id="canvas"></div>
     <div id="timeline">
