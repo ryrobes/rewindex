@@ -2,6 +2,7 @@
   const canvas = document.getElementById('canvas');
   const workspace = document.getElementById('workspace');
   const resultsEl = document.getElementById('results');
+  const resultsHeaderEl = document.getElementById('resultsHeader');
   const statusEl = document.getElementById('status');
   const qEl = document.getElementById('q');
   const searchContainer = qEl.parentElement;
@@ -276,7 +277,7 @@
 
   function adjustTimelineLeft(){
     const sidebar = document.getElementById('sidebar');
-    const left = sidebar ? sidebar.offsetWidth : 320;
+    const left = sidebar ? sidebar.offsetWidth : 335;
     if(timeline) timeline.style.left = left + 'px';
     const asof = document.getElementById('asofFloat');
     if(asof) asof.style.left = left + 'px';
@@ -545,7 +546,8 @@
     // Sort files by highest score
     groupedResults.sort((a, b) => b.highestScore - a.highestScore);
 
-    // Add result count at the top
+    // Add result count to header (always visible)
+    resultsHeaderEl.innerHTML = ''; // Clear previous count
     if(groupedResults.length > 0){
       const countDiv = document.createElement('div');
       countDiv.className = 'results-count';
@@ -559,7 +561,15 @@
       } else {
         countDiv.textContent = `${matchCount} matches in ${fileCount} files${modeInfo}`;
       }
-      resultsEl.appendChild(countDiv);
+      resultsHeaderEl.appendChild(countDiv);
+
+      // Add chevron button to add filter panel
+      const addFilterBtn = document.createElement('button');
+      addFilterBtn.className = 'add-filter-btn';
+      addFilterBtn.innerHTML = '›';
+      addFilterBtn.title = 'Add filter panel';
+      addFilterBtn.onclick = () => addFilterPanel();
+      resultsHeaderEl.appendChild(addFilterBtn);
     }
 
     // In results-only mode, skip dimming logic (only matching files are rendered)
@@ -632,8 +642,8 @@
       // Click file header to focus on file (first result set, first match)
       file.onclick = ()=> {
         // Clear previous active states
-        document.querySelectorAll('.result-file.active, .result-match.active').forEach(el => el.classList.remove('active'));
-        file.classList.add('active');
+        document.querySelectorAll('.result-file-header.active, .result-match.active').forEach(el => el.classList.remove('active'));
+        fileHeader.classList.add('active');
         focusResult(fileGroup.resultSets[0]);
         file.scrollIntoView({block:'nearest'});
       };
@@ -687,7 +697,7 @@
           // Build line number with match count if > 1
           let ln = '';
           if(m.line){
-            ln = `:${m.line}`;
+            ln = `<span class="line-num">:${m.line}</span>`;
             if(m.match_count && m.match_count > 1){
               ln += ` <span class="match-count">(${m.match_count}×)</span>`;
             }
@@ -703,7 +713,7 @@
 
           item.onclick = ()=> {
             // Clear previous active states
-            document.querySelectorAll('.result-file.active, .result-match.active').forEach(el => el.classList.remove('active'));
+            document.querySelectorAll('.result-file-header.active, .result-match.active').forEach(el => el.classList.remove('active'));
             item.classList.add('active');
             focusLine(fileGroup.file_path, m.line, qEl.value);
             item.scrollIntoView({block:'nearest'});
@@ -718,7 +728,7 @@
 
       // Auto-focus first result on initial render
       if(idx === 0) {
-        file.classList.add('active');
+        fileHeader.classList.add('active');
         focusResult(fileGroup.resultSets[0]);
         grp.scrollIntoView({block:'nearest'});
       }
@@ -992,10 +1002,11 @@
       </div>
     `;
 
-    // Results container with spinner
+    // Results container with header, spinner, and content
     const resultsDiv = document.createElement('div');
     resultsDiv.className = 'filter-panel-results';
     resultsDiv.innerHTML = `
+      <div class="filter-results-header"></div>
       <div class="search-spinner filter-spinner" style="display:none;">
         <div class="spinner-ring"></div>
         <div class="spinner-text">Searching...</div>
@@ -1007,17 +1018,10 @@
       </div>
     `;
 
-    // Add nub for next panel
-    const nub = document.createElement('div');
-    nub.className = 'add-filter-nub';
-    nub.innerHTML = '<span>›</span>';
-    nub.title = 'Add another filter';
-
     // Assemble panel
     panel.appendChild(header);
     panel.appendChild(searchDiv);
     panel.appendChild(resultsDiv);
-    panel.appendChild(nub);
 
     // Add panel state
     const panelState = {
@@ -1037,19 +1041,6 @@
 
     // Hide previous panel's nub (if any) since this panel is now the last one
     // Note: filterPanels.length is now >= 1 since we just pushed
-    if(filterPanels.length > 1){
-      // There was a previous panel - hide its nub
-      const prevPanel = filterPanels[filterPanels.length - 2];
-      const prevNub = prevPanel.element.querySelector('.add-filter-nub');
-      if(prevNub) prevNub.classList.add('hidden');
-    }
-
-    // Also hide the main sidebar nub when first panel is added
-    if(filterPanels.length === 1){
-      const mainNub = document.getElementById('addFilterNub');
-      if(mainNub) mainNub.classList.add('hidden');
-    }
-
     // Animate in
     requestAnimationFrame(() => {
       panel.classList.remove('animating-in');
@@ -1084,17 +1075,6 @@
     const panel = filterPanels[index];
     panel.element.remove();
     filterPanels.splice(index, 1);
-
-    // Show the previous panel's nub (now it's the last panel)
-    if(filterPanels.length > 0){
-      const lastPanel = filterPanels[filterPanels.length - 1];
-      const lastNub = lastPanel.element.querySelector('.add-filter-nub');
-      if(lastNub) lastNub.classList.remove('hidden');
-    } else {
-      // If no panels left, show the main sidebar nub
-      const mainNub = document.getElementById('addFilterNub');
-      if(mainNub) mainNub.classList.remove('hidden');
-    }
 
     // Re-compute filtering with remaining panels
     updateAllFilterHighlighting();
@@ -1227,8 +1207,10 @@
 
   // Render results in a filter panel (same format as primary results)
   function renderFilterPanelResults(panel){
-    // Use filter-results-content wrapper instead of clearing entire resultsDiv (preserves spinner)
+    // Get header and content wrappers
+    let resultsHeader = panel.element.querySelector('.filter-results-header');
     let resultsContent = panel.element.querySelector('.filter-results-content');
+
     if(!resultsContent){
       // Fallback: create wrapper if it doesn't exist
       const resultsDiv = panel.element.querySelector('.filter-panel-results');
@@ -1238,6 +1220,7 @@
     }
 
     resultsContent.innerHTML = '';
+    resultsHeader.innerHTML = ''; // Clear header
     const results = panel.results;
 
     if(results.length === 0 && !panel.query){
@@ -1258,13 +1241,21 @@
       return;
     }
 
-    // Count display (same as primary)
+    // Count display in header (always visible)
     const countDiv = document.createElement('div');
     countDiv.className = 'results-count';
     const fileCount = results.length;
     const matchCount = results.reduce((sum, r) => sum + (r.matches ? r.matches.length : 0), 0);
     countDiv.textContent = `${matchCount} matches in ${fileCount} files`;
-    resultsContent.appendChild(countDiv);
+    resultsHeader.appendChild(countDiv);
+
+    // Add chevron button to add another filter panel
+    const addFilterBtn = document.createElement('button');
+    addFilterBtn.className = 'add-filter-btn';
+    addFilterBtn.innerHTML = '›';
+    addFilterBtn.title = 'Add another filter panel';
+    addFilterBtn.onclick = () => addFilterPanel();
+    resultsHeader.appendChild(addFilterBtn);
 
     // Results list: per-file group with per-match lines (same as primary)
     results.forEach((r, idx) => {
@@ -1279,7 +1270,12 @@
       file.className = 'result-file';
       if(r.deleted) file.classList.add('deleted');
       file.textContent = r.file_path;
-      file.onclick = () => { focusResult(r); file.scrollIntoView({block:'nearest'}); };
+      file.onclick = () => {
+        document.querySelectorAll('.result-file-header.active, .result-match.active').forEach(el => el.classList.remove('active'));
+        fileHeader.classList.add('active');
+        focusResult(r);
+        file.scrollIntoView({block:'nearest'});
+      };
 
       // Add deleted badge
       if(r.deleted){
@@ -1308,11 +1304,16 @@
       (r.matches||[]).forEach((m) => {
         const item = document.createElement('div');
         item.className = 'result-match';
-        const ln = m.line ? `:${m.line}` : '';
+        const ln = m.line ? `<span class="line-num">:${m.line}</span>` : '';
         const snippet = m.highlight || '';
         // Use innerHTML to render <mark> tags for highlighting
         item.innerHTML = `${ln}  ${snippet.slice(0,120)}`;
-        item.onclick = () => { focusLine(r.file_path, m.line, panel.query); item.scrollIntoView({block:'nearest'}); };
+        item.onclick = () => {
+          document.querySelectorAll('.result-file-header.active, .result-match.active').forEach(el => el.classList.remove('active'));
+          item.classList.add('active');
+          focusLine(r.file_path, m.line, panel.query);
+          item.scrollIntoView({block:'nearest'});
+        };
         ol.appendChild(item);
       });
 
@@ -1419,10 +1420,11 @@
   // Update workspace left position based on number of panels
   function updateWorkspacePosition(){
     const workspace = document.getElementById('workspace');
+    const sidebar = document.getElementById('sidebar');
     const panelCount = filterPanels.length;
-    const baseLeft = 320; // Primary sidebar width
+    const baseLeft = sidebar ? parseInt(sidebar.style.width || '345') : 345; // Current sidebar width
     const panelWidth = 300;
-    const totalLeft = baseLeft + (panelCount * panelWidth);
+    const totalLeft = baseLeft + (panelCount * panelWidth) + 10;
 
     workspace.style.left = `${totalLeft}px`;
   }
@@ -3060,10 +3062,69 @@
     };
   }
 
-  // Add Filter Nub handler
-  const addFilterNub = document.getElementById('addFilterNub');
-  if(addFilterNub){
-    addFilterNub.onclick = () => addFilterPanel();
+  // Sidebar Resizer
+  let sidebarWidth = 345; // Initial width
+  const minSidebarWidth = 280;
+  const maxSidebarWidth = 600;
+  const sidebarEl = document.getElementById('sidebar');
+  const sidebarResizer = document.getElementById('sidebarResizer');
+  const workspaceEl = document.getElementById('workspace');
+  const filterPanelsContainer = document.getElementById('filterPanelsContainer');
+
+  if(sidebarResizer){
+    let isResizing = false;
+    let startX = 0;
+    let startWidth = 0;
+
+    sidebarResizer.addEventListener('mousedown', (e) => {
+      isResizing = true;
+      startX = e.clientX;
+      startWidth = sidebarWidth;
+      sidebarResizer.classList.add('resizing');
+      document.body.style.cursor = 'col-resize';
+      document.body.style.userSelect = 'none';
+      e.preventDefault();
+    });
+
+    document.addEventListener('mousemove', (e) => {
+      if(!isResizing) return;
+
+      const delta = e.clientX - startX;
+      let newWidth = startWidth + delta;
+
+      // Enforce limits
+      newWidth = Math.max(minSidebarWidth, Math.min(maxSidebarWidth, newWidth));
+
+      // Update sidebar width
+      sidebarWidth = newWidth;
+      sidebarEl.style.width = `${newWidth}px`;
+
+      // Update workspace left position
+      workspaceEl.style.left = `${newWidth + 10}px`;
+
+      // Update filter panels container left position
+      filterPanelsContainer.style.left = `${newWidth - 10}px`;
+
+      // Update timeline left position
+      if(timeline){
+        timeline.style.left = `${newWidth}px`;
+      }
+
+      // Update asofFloat left position
+      const asofFloatEl = document.getElementById('asofFloat');
+      if(asofFloatEl){
+        asofFloatEl.style.left = `${newWidth}px`;
+      }
+    });
+
+    document.addEventListener('mouseup', () => {
+      if(isResizing){
+        isResizing = false;
+        sidebarResizer.classList.remove('resizing');
+        document.body.style.cursor = '';
+        document.body.style.userSelect = '';
+      }
+    });
   }
 
   // DISABLED: Old secondary filter toggle (replaced with multi-panel system)
@@ -3570,7 +3631,7 @@
     spark.innerHTML = '';
     if(!series || series.length===0){
       const svgNS = 'http://www.w3.org/2000/svg';
-      const H = spark.clientHeight || 28;
+      const H = spark.clientHeight || 60;
       const svg = document.createElementNS(svgNS, 'svg');
       svg.setAttribute('viewBox', `0 0 1 ${H}`);
       svg.setAttribute('preserveAspectRatio', 'none');
@@ -3581,7 +3642,7 @@
       updateSparkTick();
       return;
     }
-    const H = spark.clientHeight || 28;
+    const H = spark.clientHeight || 60;
 
     // Better normalization: use 95th percentile to handle outliers
     const counts = series.map(b => b.count || 0);
@@ -3606,8 +3667,12 @@
       const x = i; // normalized unit step
       // Clip values to maxCount to prevent going off-screen
       const clippedCount = Math.min(b.count || 0, maxCount);
-      const h = Math.max(1, Math.round((clippedCount / maxCount) * H * 0.9)); // Use 90% of height for padding
-      const y = H - h;
+      // Use 70% of height with 10% padding top and 20% padding bottom to prevent clipping
+      const paddingTop = H * 0.1;
+      const paddingBottom = H * 0.2;
+      const availableHeight = H - paddingTop - paddingBottom;
+      const h = Math.max(1, Math.round((clippedCount / maxCount) * availableHeight));
+      const y = paddingTop + (availableHeight - h);
       return { x, y };
     });
     sparkKeys = data.map(b => b.key);
@@ -3636,8 +3701,10 @@
     const line = document.createElementNS(svgNS, 'path');
     line.setAttribute('d', d);
     line.setAttribute('fill', 'none');
-    line.setAttribute('stroke', 'rgba(57,186,230,0.9)');
-    line.setAttribute('stroke-width', '2');
+    // Use CSS variable for accent color
+    const accentColor = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim();
+    line.setAttribute('stroke', accentColor || 'rgba(57,186,230,0.9)');
+    line.setAttribute('stroke-width', '2.5');
     line.setAttribute('stroke-linecap', 'round');
     line.setAttribute('stroke-linejoin', 'round');
     line.setAttribute('vector-effect', 'non-scaling-stroke');

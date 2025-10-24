@@ -33,12 +33,9 @@
 
 <body>
   <div id="sidebar">
-    <!-- Add Filter Nub (tab that sticks out) -->
-    <div id="addFilterNub" class="add-filter-nub" title="Add filter panel">
-      <span>›</span>
-    </div>
-
+    <div id="sidebarResizer" class="sidebar-resizer"></div>
     <div class="section results-section">
+      <div id="resultsHeader" class="results-header"></div>
       <div class="search-spinner" id="primarySpinner" style="display:none;">
         <div class="spinner-ring"></div>
         <div class="spinner-text">Searching...</div>
@@ -54,14 +51,14 @@
       <div class="status-header">
         
         <div class="control-buttons">
-          <button id="resultsOnly" class="btn-toggle-small active" title="Show only search results (default)">Results Only</button>
+          <!-- <button id="resultsOnly" class="btn-toggle-small active" title="Show only search results (default)">Results Only</button> -->
           <button id="treemapMode" class="btn-toggle-small">Treemap</button>
           <button id="treemapFolders" class="btn-toggle-small sub-toggle" style="display:none;">Folders</button>
           <button id="sizeByBytes" class="btn-toggle-small sub-toggle" style="display:none;">Bytes</button>
           <button id="dynText" class="btn-toggle-small">Dyn Text</button>
           <button id="followCli" class="btn-toggle-small">Follow CLI</button>
           <button id="followUpdates" class="btn-toggle-small">Follow Updates</button>
-          <button id="systemThemeToggle" class="btn-toggle-small" style="display:none;" title="Toggle Omarchy system theme">🎨 System</button>
+          <button id="systemThemeToggle" class="btn-toggle-small" style="display:none;" title="Toggle Omarchy system theme">Theme</button>
           <button id="startWatch" class="btn btn-watcher">Start Watcher</button>
           <button id="stopWatch" class="btn btn-watcher">Stop Watcher</button>
         </div>
