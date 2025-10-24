@@ -3851,29 +3851,56 @@
     sparklineEl.appendChild(svg);
     sparkKeys = data.map(b => b.key);
 
-    // Draw bars instead of line
+    // Draw smoothed area chart
     const accentColor = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim();
-    const barWidth = (n > 1) ? (n - 0) / n : 1; // Width in viewBox units, slight gap between bars
+    const paddingTop = H * 0.1;
+    const paddingBottom = H * 0.2;
+    const availableHeight = H - paddingTop - paddingBottom;
 
-    data.forEach((b, i) => {
+    // Calculate y positions for all points
+    const points = data.map((b, i) => {
       const x = i;
       const clippedCount = Math.min(b.count || 0, maxCount);
-      const paddingTop = H * 0.1;
-      const paddingBottom = H * 0.2;
-      const availableHeight = H - paddingTop - paddingBottom;
-      const barHeight = Math.max(1, Math.round((clippedCount / maxCount) * availableHeight));
-      const y = paddingTop + (availableHeight - barHeight);
-
-      // Create bar rectangle
-      const rect = document.createElementNS(svgNS, 'rect');
-      rect.setAttribute('x', x - barWidth / 2);
-      rect.setAttribute('y', y);
-      rect.setAttribute('width', barWidth);
-      rect.setAttribute('height', barHeight);
-      rect.setAttribute('fill', accentColor || 'rgba(57,186,230,0.6)');
-      rect.setAttribute('fill-opacity', '0.45'); // Slight transparency
-      svg.appendChild(rect);
+      const yHeight = Math.max(1, (clippedCount / maxCount) * availableHeight);
+      const y = paddingTop + (availableHeight - yHeight);
+      return { x, y };
     });
+
+    if (points.length === 0) return;
+
+    // Create smooth curve using cubic Bezier curves
+    let pathData = `M ${points[0].x} ${points[0].y}`; // Move to first point
+
+    // Generate smooth curve through points using Catmull-Rom inspired control points
+    for (let i = 0; i < points.length - 1; i++) {
+      const p0 = points[Math.max(0, i - 1)];
+      const p1 = points[i];
+      const p2 = points[i + 1];
+      const p3 = points[Math.min(points.length - 1, i + 2)];
+
+      // Calculate control points for smooth curve (tension = 0.3 for gentler curves)
+      const tension = 0.3;
+      const cp1x = p1.x + (p2.x - p0.x) * tension;
+      const cp1y = p1.y + (p2.y - p0.y) * tension;
+      const cp2x = p2.x - (p3.x - p1.x) * tension;
+      const cp2y = p2.y - (p3.y - p1.y) * tension;
+
+      pathData += ` C ${cp1x} ${cp1y}, ${cp2x} ${cp2y}, ${p2.x} ${p2.y}`;
+    }
+
+    // Close the area: line down to bottom right, across to bottom left, close
+    const bottomY = H - paddingBottom;
+    pathData += ` L ${points[points.length - 1].x} ${bottomY}`; // Down to bottom right
+    pathData += ` L ${points[0].x} ${bottomY}`; // Across to bottom left
+    pathData += ` Z`; // Close path
+
+    // Create area path element
+    const path = document.createElementNS(svgNS, 'path');
+    path.setAttribute('d', pathData);
+    path.setAttribute('fill', accentColor || '#39bae6');
+    path.setAttribute('fill-opacity', '0.45');
+    path.setAttribute('stroke', 'none');
+    svg.appendChild(path);
     // Re-attach ticks on top
     if (sparkTick) sparklineEl.appendChild(sparkTick);
     if (sparkHover) sparklineEl.appendChild(sparkHover);
