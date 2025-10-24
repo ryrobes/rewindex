@@ -106,7 +106,8 @@ body {
 /* Filter Panels Container - holds dynamically created filter panels */
 #filterPanelsContainer {
   position: fixed;
-  left: 360px; 
+  left: 435px; 
+  
   top: 0;
   bottom: 0;
   z-index: 98;
@@ -121,9 +122,11 @@ body {
   width: 300px;
   height: 100%;
   margin-top: 100px;
+  font-family: var(--font-sans), Inter, system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Noto Sans, Helvetica Neue, Arial, sans-serif;
   /* background: #13172119; */
   /* background: var(--bgt); */
-  backdrop-filter: blur(8px);
+  /* background: var(--bgt); */
+  backdrop-filter: blur(8px)brightness(80%);
   border-right: 1px solid var(--border);
   padding: 16px;
   overflow-y: auto;
@@ -146,7 +149,7 @@ body {
   align-items: center;
   margin-bottom: 12px;
   padding-bottom: 12px;
-  border-bottom: 1px solid var(--border);
+  /* border-bottom: 1px solid var(--border); */
 }
 
 .filter-panel-header h3 {
@@ -187,12 +190,14 @@ body {
   width: 100%;
   padding: 8px 10px;
   font-size: 13px;
-  font-family: var(--font-mono), 'Fira Code', monospace;
+  /* font-family: var(--font-mono), 'Fira Code', monospace; */
   color: var(--text);
   background: rgba(0, 0, 0, 0.3);
-  border: 1px solid var(--border);
+  /* border: 1px solid var(--border); */
   border-radius: 4px;
   outline: none;
+    
+  border: none;
   box-sizing: border-box;
   transition: all 0.2s ease;
 }
@@ -219,9 +224,11 @@ body {
   
   font-size: 12px;
   font-family: var(--font-mono), 'Fira Code', monospace;
-  color: var(--muted);
+  color: var(--accent-subtle);
   background: rgba(0, 0, 0, 0.3);
-  border: 1px solid var(--border);
+  outline: none;
+  border: none;
+  /* border: 1px solid var(--border); */
   border-radius: 3px;
   cursor: pointer;
   transition: all 0.2s ease;
@@ -250,8 +257,8 @@ body {
 
 .filter-results-header {
   /* padding: 8px 10px; */
-  background: var(--bg);
-  border-bottom: 1px solid var(--border);
+  /* background: var(--bg); */
+  /* border-bottom: 1px solid var(--border); */
   flex-shrink: 0;
   /* min-height: 30px; */
   display: flex;
@@ -2228,7 +2235,7 @@ body {
 
 /* Adjust workspace when secondary sidebar is visible */
 body.secondary-filter-active #workspace {
-  /* right: 360px; */
+  right: 360px;
   transition: right 0.3s ease;
 }
 
