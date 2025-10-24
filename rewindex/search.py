@@ -114,11 +114,32 @@ def simple_search_es(
         date_field = "created_at" if index.endswith("_versions") else "last_modified"
         filter_clauses.append({"range": {date_field: {"lte": filters.created_before_ms}}})
 
+    # Handle exclude_paths: comma-separated list of glob patterns
+    must_not_clauses: List[Dict[str, Any]] = []
+    if filters.exclude_paths:
+        import logging
+        logger = logging.getLogger(__name__)
+        # Split by comma and trim whitespace
+        patterns = [p.strip() for p in filters.exclude_paths.split(',') if p.strip()]
+        logger.info(f"🚫 Applying exclude_paths filter: {patterns}")
+        for pattern in patterns:
+            # Convert glob pattern to Elasticsearch wildcard format
+            # ** becomes *, and wrap in wildcards if not already present
+            es_pattern = pattern.replace('**', '*')
+            # If pattern doesn't start with *, add it to match anywhere in path
+            if not es_pattern.startswith('*'):
+                es_pattern = '*' + es_pattern
+            # If pattern doesn't end with *, add it
+            if not es_pattern.endswith('*'):
+                es_pattern = es_pattern + '*'
+            must_not_clauses.append({"wildcard": {"file_path": es_pattern}})
+
     body: Dict[str, Any] = {
         "query": {
             "bool": {
                 "must": must if must else [{"match_all": {}}],
                 "filter": filter_clauses,
+                "must_not": must_not_clauses if must_not_clauses else [],
             }
         },
         "size": max(1, options.limit),
@@ -141,9 +162,9 @@ def simple_search_es(
     # Debug logging
     import logging
     logger = logging.getLogger(__name__)
-    if filters.path_prefix:
+    if filters.path_prefix or filters.exclude_paths:
         import json
-        logger.info(f"🔍 Elasticsearch query with path_prefix filter:\n{json.dumps(body, indent=2)}")
+        logger.info(f"🔍 Elasticsearch query with filters:\n{json.dumps(body, indent=2)}")
 
     if options.highlight:
         body["highlight"] = {

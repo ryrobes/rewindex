@@ -553,6 +553,8 @@ class RewindexHandler(BaseHTTPRequestHandler):
                 if filters.get("path_prefix"):
                     logger.info(f"🔍 Received path_prefix filter: {filters.get('path_prefix')}")
                     logger.info(f"   Full filters dict: {filters}")
+                if filters.get("exclude_paths"):
+                    logger.info(f"🚫 Received exclude_paths filter: {filters.get('exclude_paths')}")
 
                 es = ESClient(cfg.elasticsearch.host)
                 idx = ensure_indices(es, cfg.resolved_index_prefix())
@@ -567,7 +569,7 @@ class RewindexHandler(BaseHTTPRequestHandler):
                         path_pattern=filters.get("path_pattern"),
                         path_prefix=filters.get("path_prefix"),
                         file_types=filters.get("file_types"),
-                        exclude_paths=None,
+                        exclude_paths=filters.get("exclude_paths"),
                         modified_after=None,
                         has_function=filters.get("has_function"),
                         has_class=filters.get("has_class"),

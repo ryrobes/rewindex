@@ -5,11 +5,10 @@
   const resultsHeaderEl = document.getElementById('resultsHeader');
   const statusEl = document.getElementById('status');
   const qEl = document.getElementById('q');
-  const searchContainer = qEl.parentElement;
+  const searchBarEl = document.getElementById('searchBar');
   const clearSearchBtn = document.getElementById('clearSearch');
-  const pathFilterToggleBtn = document.getElementById('pathFilterToggle');
-  const pathFilterContainer = document.getElementById('pathFilterContainer');
   const pathFilterInput = document.getElementById('pathFilter');
+  const pathExcludeInput = document.getElementById('pathExclude');
   const deletedToggleBtn = document.getElementById('deletedToggle');
   const partialToggleBtn = document.getElementById('partialToggle');
   const fuzzyToggleBtn = document.getElementById('fuzzyToggle');
@@ -23,9 +22,7 @@
   const systemThemeToggleBtn = document.getElementById('systemThemeToggle');
   const languageBarEl = document.getElementById('languageBar');
   const languageLegendEl = document.getElementById('languageLegend');
-  const timeline = document.getElementById('timeline');
-  const spark = document.getElementById('sparkline');
-  const scrubber = document.getElementById('scrubber');
+  const sparklineEl = document.getElementById('sparkline');
   const asofLabel = document.getElementById('asofLabel');
   const sparkTick = document.getElementById('sparkTick');
   const sparkHover = document.getElementById('sparkHover');
@@ -222,8 +219,8 @@
   applyTransform();
 
   workspace.addEventListener('wheel', (e)=>{
-    // Ignore zooming when interacting with timeline
-    if(e.target.closest('#timeline')) return;
+    // Ignore zooming when interacting with search bar
+    if(e.target.closest('#searchBar')) return;
     e.preventDefault();
     const rect = workspace.getBoundingClientRect();
     const mouseX = e.clientX - rect.left;
@@ -245,8 +242,8 @@
     // cancel any animation
     isAnimating = false;
     if(animHandle) cancelAnimationFrame(animHandle);
-    // ignore drags on timeline and its children
-    if(e.target.closest('#timeline') || e.target.closest('#asofFloat')) return;
+    // ignore drags on search bar and its children
+    if(e.target.closest('#searchBar')) return;
     // Don't drag when clicking buttons or other interactive elements
     if(e.target.closest('button')) return;
     // Don't drag when interacting with the search input
@@ -254,8 +251,6 @@
     dragging = true;
     dragStart = [e.clientX - offsetX, e.clientY - offsetY];
     workspace.setPointerCapture(e.pointerId);
-    // Hide search container while dragging to prevent text selection
-    if(searchContainer) searchContainer.classList.add('dragging');
   });
   workspace.addEventListener('pointermove', (e)=>{
     if(!dragging) return;
@@ -265,8 +260,6 @@
   });
   workspace.addEventListener('pointerup', ()=>{
     dragging = false;
-    // Show search container again
-    if(searchContainer) searchContainer.classList.remove('dragging');
   });
 
   async function fetchJSON(url, opts){
@@ -283,15 +276,14 @@
     };
   }
 
-  function adjustTimelineLeft(){
+  function adjustSearchBarLeft(){
     const sidebar = document.getElementById('sidebar');
-    const left = sidebar ? sidebar.offsetWidth : 335;
-    if(timeline) timeline.style.left = left + 'px';
-    const asof = document.getElementById('asofFloat');
-    if(asof) asof.style.left = left + 'px';
+    const left = sidebar ? sidebar.offsetWidth : 445;
+    if(searchBarEl) searchBarEl.style.left = left + 'px';
+    if(workspace) workspace.style.left = 0 + 'px';
   }
-  window.addEventListener('resize', adjustTimelineLeft);
-  adjustTimelineLeft();
+  window.addEventListener('resize', adjustSearchBarLeft);
+  adjustSearchBarLeft();
 
   async function refreshStatus(){
     try{
@@ -398,16 +390,13 @@
       filters.path_prefix = pathPrefix;
       console.log('🔍 [doSearch] Path prefix filter:', pathPrefix);
       console.log('   Full filters object:', filters);
+    }
 
-      // Visual indicator for active path filter
-      if(pathFilterToggleBtn){
-        pathFilterToggleBtn.style.borderBottom = '2px solid var(--accent)';
-      }
-    } else {
-      // Remove visual indicator when no filter
-      if(pathFilterToggleBtn){
-        pathFilterToggleBtn.style.borderBottom = 'none';
-      }
+    // TODO: Add path exclude filter
+    const pathExclude = pathExcludeInput?.value?.trim();
+    if(pathExclude){
+      filters.exclude_paths = pathExclude;
+      console.log('🚫 [doSearch] Path exclude filter:', pathExclude);
     }
 
     const body = {
@@ -1526,6 +1515,7 @@
       const uiColors = currentOmarchyTheme.ui;
 
       const bg = toMonacoColor(uiColors['--bg'] || '#0a142877');
+      const bgt = toMonacoColor(uiColors['--bg'] + '90' || '#0a1428');
       const fg = toMonacoColor(uiColors['--text'] || '#f0f8ff');
       const accent = toMonacoColor(uiColors['--accent'] || '#39bae6');
       const border = toMonacoColor(uiColors['--border'] || '#44475a');
@@ -3377,24 +3367,8 @@
     };
   }
 
-  // Path filter toggle
-  if(pathFilterToggleBtn && pathFilterContainer && pathFilterInput){
-    pathFilterToggleBtn.onclick = ()=>{
-      const isExpanded = pathFilterContainer.style.display !== 'none';
-      if(isExpanded){
-        // Collapse
-        pathFilterContainer.style.display = 'none';
-        pathFilterToggleBtn.classList.remove('active');
-      } else {
-        // Expand
-        pathFilterContainer.style.display = 'block';
-        pathFilterToggleBtn.classList.add('active');
-        // Focus the input after a short delay (allows animation to start)
-        setTimeout(() => pathFilterInput.focus(), 100);
-      }
-    };
-
-    // Re-search when path filter changes
+  // Path filter input - re-search when changed
+  if(pathFilterInput){
     pathFilterInput.addEventListener('input', ()=>{
       if(searchTimer) clearTimeout(searchTimer);
       searchTimer = setTimeout(()=> {
@@ -3404,8 +3378,28 @@
       }, 300);
     });
 
-    // Handle Enter key in path filter input
     pathFilterInput.addEventListener('keydown', (e)=>{
+      if(e.key === 'Enter'){
+        e.preventDefault();
+        if(qEl.value.trim()){
+          doSearch();
+        }
+      }
+    });
+  }
+
+  // Path exclude input - re-search when changed
+  if(pathExcludeInput){
+    pathExcludeInput.addEventListener('input', ()=>{
+      if(searchTimer) clearTimeout(searchTimer);
+      searchTimer = setTimeout(()=> {
+        if(qEl.value.trim()){
+          doSearch(); // Re-run search with new exclude filter
+        }
+      }, 300);
+    });
+
+    pathExcludeInput.addEventListener('keydown', (e)=>{
       if(e.key === 'Enter'){
         e.preventDefault();
         if(qEl.value.trim()){
@@ -3483,9 +3477,9 @@
   }
 
   // Sidebar Resizer
-  let sidebarWidth = 345; // Initial width
+  let sidebarWidth = 445; // Initial width
   const minSidebarWidth = 280;
-  const maxSidebarWidth = 600;
+  const maxSidebarWidth = 800;
   const sidebarEl = document.getElementById('sidebar');
   const sidebarResizer = document.getElementById('sidebarResizer');
   const workspaceEl = document.getElementById('workspace');
@@ -3525,16 +3519,8 @@
       // Update filter panels container left position
       filterPanelsContainer.style.left = `${newWidth - 10}px`;
 
-      // Update timeline left position
-      if(timeline){
-        timeline.style.left = `${newWidth}px`;
-      }
-
-      // Update asofFloat left position
-      const asofFloatEl = document.getElementById('asofFloat');
-      if(asofFloatEl){
-        asofFloatEl.style.left = `${newWidth}px`;
-      }
+      // Update search bar and workspace position
+      adjustSearchBarLeft();
     });
 
     document.addEventListener('mouseup', () => {
@@ -3867,7 +3853,6 @@
     goLiveBtn.onclick = async ()=>{
       try{
         console.debug('[rewindex-ui] Go Live clicked');
-        if(scrubber) scrubber.value = '1000';
         currentAsOfMs = null;
         asofLabel.textContent = 'Live';
         await refreshAllTiles(null);
@@ -3924,19 +3909,19 @@
 
         if(newAsOf==null){
           // live - only refresh if project didn't already change
-          if(typeof scrubber !== 'undefined'){ scrubber.value = '1000'; currentAsOfMs = null; asofLabel.textContent = 'Live'; }
+          currentAsOfMs = null;
+          asofLabel.textContent = 'Live';
+          updateSparkTick();
           if(!projectJustChanged && currentAsOfMs !== null){
             // Was on a temporal view, now going live
             await refreshAllTiles(null);
             currentAsOfMs = null;
           }
         }else{
-          if(timelineMin!=null && timelineMax!=null && typeof scrubber !== 'undefined'){
+          if(timelineMin!=null && timelineMax!=null){
             currentAsOfMs = newAsOf;
-            const pct = (newAsOf - timelineMin) / (timelineMax - timelineMin);
-            const v = Math.round(Math.min(1, Math.max(0, pct)) * 1000);
-            scrubber.value = String(v);
             try{ asofLabel.textContent = new Date(currentAsOfMs).toLocaleString(); }catch(e){ asofLabel.textContent = `${currentAsOfMs}`; }
+            updateSparkTick();
             // Only refresh if project didn't already change (avoid double refresh)
             if(!projectJustChanged){
               await refreshAllTiles(currentAsOfMs);
@@ -4007,13 +3992,13 @@
   }catch(e){ /* SSE not supported? */ }
 
   async function refreshTimeline(){
-    if(!timeline || !spark || !scrubber) return;
+    if(!sparklineEl) return;
     try{
       const s = await fetchJSON('/timeline/stats');
       if(s && s.min && s.max){
         timelineMin = s.min; timelineMax = s.max;
         drawSparkline(s.series||[]);
-        // Update tick position if we're in scrubbed mode
+        // Update tick position if we're in time-travel mode
         if(currentAsOfMs != null) updateSparkTick();
       } else {
         drawSparkline([]);
@@ -4025,7 +4010,7 @@
 
   // Timeline init
   (async function initTimeline(){
-    if(!timeline || !spark || !scrubber) return;
+    if(!sparklineEl) return;
     try{
       const s = await fetchJSON('/timeline/stats');
       if(s && s.min && s.max){
@@ -4035,15 +4020,11 @@
         // Keep panel visible with empty sparkline
         drawSparkline([]);
       }
-      scrubber.value = 1000; // live
       asofLabel.textContent = 'Live';
-      scrubber.addEventListener('input', ()=>{
-        if(scrubTimer) clearTimeout(scrubTimer);
-        scrubTimer = setTimeout(()=> applyScrub(), 150);
-      });
+
       // Sparkline hover + click
-      spark.addEventListener('mousemove', (ev)=>{
-        const rect = spark.getBoundingClientRect();
+      sparklineEl.addEventListener('mousemove', (ev)=>{
+        const rect = sparklineEl.getBoundingClientRect();
         const x = ev.clientX - rect.left;
         const W = rect.width || 1;
         if(sparkKeys.length>0){
@@ -4057,53 +4038,54 @@
           if(sparkHover){ sparkHover.style.display='block'; sparkHover.style.left = `${Math.round(x)}px`; }
         }
       });
-      spark.addEventListener('mouseleave', ()=>{
+      sparklineEl.addEventListener('mouseleave', ()=>{
         if(currentAsOfMs==null) asofLabel.textContent='Live'; else asofLabel.textContent=new Date(currentAsOfMs).toLocaleString();
         if(sparkHover) sparkHover.style.display='none';
       });
-      spark.addEventListener('click', (ev)=>{
-        const rect = spark.getBoundingClientRect();
+      sparklineEl.addEventListener('click', async (ev)=>{
+        const rect = sparklineEl.getBoundingClientRect();
         const x = ev.clientX - rect.left;
         const W = rect.width || 1;
+        let ts = null;
         if(sparkKeys.length>0){
           const n = sparkKeys.length;
           const idx = Math.max(0, Math.min(n-1, Math.round((x/W) * (n-1))));
-          const ts = sparkKeys[idx];
-          if(ts!=null && timelineMin!=null && timelineMax!=null && timelineMax>timelineMin){
-            const v = Math.round(((ts - timelineMin) / (timelineMax - timelineMin)) * 1000);
-            scrubber.value = String(Math.max(0, Math.min(1000, v)));
-          }
-        } else {
+          ts = sparkKeys[idx];
+        } else if(timelineMin!=null && timelineMax!=null){
           const pct = Math.min(1, Math.max(0, x / W));
-          const v = Math.round(pct * 1000);
-          scrubber.value = String(v);
+          ts = timelineMin + (timelineMax - timelineMin) * pct;
         }
-        applyScrub().then(()=> { updateSparkTick(); });
+        if(ts!=null){
+          currentAsOfMs = Math.floor(ts);
+          asofLabel.textContent = new Date(currentAsOfMs).toLocaleString();
+          await refreshAllTiles(currentAsOfMs);
+          updateSparkTick();
+          if(!followCliMode && qEl.value) await doSearch();
+        }
       });
     }catch(e){
       // Keep timeline visible even if stats endpoint fails
       drawSparkline([]);
-      scrubber.value = 1000;
       asofLabel.textContent = 'Live';
     }
   })();
 
   function drawSparkline(series){
-    spark.innerHTML = '';
+    sparklineEl.innerHTML = '';
     if(!series || series.length===0){
       const svgNS = 'http://www.w3.org/2000/svg';
-      const H = spark.clientHeight || 60;
+      const H = sparklineEl.clientHeight || 32;
       const svg = document.createElementNS(svgNS, 'svg');
       svg.setAttribute('viewBox', `0 0 1 ${H}`);
       svg.setAttribute('preserveAspectRatio', 'none');
-      spark.appendChild(svg);
+      sparklineEl.appendChild(svg);
       sparkKeys = [];
-      if (sparkTick) spark.appendChild(sparkTick);
-      if (sparkHover) spark.appendChild(sparkHover);
+      if (sparkTick) sparklineEl.appendChild(sparkTick);
+      if (sparkHover) sparklineEl.appendChild(sparkHover);
       updateSparkTick();
       return;
     }
-    const H = spark.clientHeight || 60;
+    const H = sparklineEl.clientHeight || 32;
 
     // Better normalization: use 95th percentile to handle outliers
     const counts = series.map(b => b.count || 0);
@@ -4123,62 +4105,41 @@
     const svg = document.createElementNS(svgNS, 'svg');
     svg.setAttribute('viewBox', `0 0 ${n-1} ${H}`);
     svg.setAttribute('preserveAspectRatio', 'none');
-    spark.appendChild(svg);
-    const points = data.map((b, i) => {
-      const x = i; // normalized unit step
-      // Clip values to maxCount to prevent going off-screen
+    sparklineEl.appendChild(svg);
+    sparkKeys = data.map(b => b.key);
+
+    // Draw bars instead of line
+    const accentColor = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim();
+    const barWidth = (n > 1) ? (n - 0) / n : 1; // Width in viewBox units, slight gap between bars
+
+    data.forEach((b, i) => {
+      const x = i;
       const clippedCount = Math.min(b.count || 0, maxCount);
-      // Use 70% of height with 10% padding top and 20% padding bottom to prevent clipping
       const paddingTop = H * 0.1;
       const paddingBottom = H * 0.2;
       const availableHeight = H - paddingTop - paddingBottom;
-      const h = Math.max(1, Math.round((clippedCount / maxCount) * availableHeight));
-      const y = paddingTop + (availableHeight - h);
-      return { x, y };
+      const barHeight = Math.max(1, Math.round((clippedCount / maxCount) * availableHeight));
+      const y = paddingTop + (availableHeight - barHeight);
+
+      // Create bar rectangle
+      const rect = document.createElementNS(svgNS, 'rect');
+      rect.setAttribute('x', x - barWidth / 2);
+      rect.setAttribute('y', y);
+      rect.setAttribute('width', barWidth);
+      rect.setAttribute('height', barHeight);
+      rect.setAttribute('fill', accentColor || 'rgba(57,186,230,0.6)');
+      rect.setAttribute('fill-opacity', '0.45'); // Slight transparency
+      svg.appendChild(rect);
     });
-    sparkKeys = data.map(b => b.key);
-    // Build smoothed line path using cubic Bezier curves
-    let d = '';
-    if (points.length > 0) {
-      d = `M ${points[0].x} ${points[0].y}`;
-
-      // Calculate smooth curve control points for each segment
-      for (let i = 0; i < points.length - 1; i++) {
-        const p0 = points[Math.max(0, i - 1)];
-        const p1 = points[i];
-        const p2 = points[i + 1];
-        const p3 = points[Math.min(points.length - 1, i + 2)];
-
-        // Catmull-Rom to Bezier conversion with smoothing factor
-        const tension = 0.3; // Lower = smoother, higher = closer to points
-        const cp1x = p1.x + (p2.x - p0.x) * tension;
-        const cp1y = p1.y + (p2.y - p0.y) * tension;
-        const cp2x = p2.x - (p3.x - p1.x) * tension;
-        const cp2y = p2.y - (p3.y - p1.y) * tension;
-
-        d += ` C ${cp1x} ${cp1y}, ${cp2x} ${cp2y}, ${p2.x} ${p2.y}`;
-      }
-    }
-    const line = document.createElementNS(svgNS, 'path');
-    line.setAttribute('d', d);
-    line.setAttribute('fill', 'none');
-    // Use CSS variable for accent color
-    const accentColor = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim();
-    line.setAttribute('stroke', accentColor || 'rgba(57,186,230,0.9)');
-    line.setAttribute('stroke-width', '2.5');
-    line.setAttribute('stroke-linecap', 'round');
-    line.setAttribute('stroke-linejoin', 'round');
-    line.setAttribute('vector-effect', 'non-scaling-stroke');
-    svg.appendChild(line);
     // Re-attach ticks on top
-    if (sparkTick) spark.appendChild(sparkTick);
-    if (sparkHover) spark.appendChild(sparkHover);
+    if (sparkTick) sparklineEl.appendChild(sparkTick);
+    if (sparkHover) sparklineEl.appendChild(sparkHover);
     updateSparkTick();
   }
 
   function updateSparkTick(){
-    if(!spark || !sparkTick){ return; }
-    const W = spark.clientWidth || 600;
+    if(!sparklineEl || !sparkTick){ return; }
+    const W = sparklineEl.clientWidth || 600;
     let x = W; // Default to far right (live)
 
     // Position based on index in sparkKeys (filtered data), not timestamp percentage
@@ -4205,17 +4166,7 @@
     try{ sparkTick.classList.remove('snap'); void sparkTick.offsetWidth; sparkTick.classList.add('snap'); }catch(e){}
   }
 
-  async function applyScrub(){
-    if(timelineMin==null || timelineMax==null) return;
-    const v = parseInt(scrubber.value,10) || 1000;
-    if(v>=1000){ currentAsOfMs = null; asofLabel.textContent='Live'; await refreshAllTiles(null); updateSparkTick(); if(!followCliMode && qEl.value) await doSearch(); return; }
-    const ts = timelineMin + ((timelineMax - timelineMin) * (v/1000));
-    currentAsOfMs = Math.floor(ts);
-    try{ asofLabel.textContent = new Date(currentAsOfMs).toLocaleString(); }catch(e){ asofLabel.textContent = `${currentAsOfMs}`; }
-    await refreshAllTiles(currentAsOfMs);
-    updateSparkTick();
-    if(!followCliMode && qEl.value) await doSearch();
-  }
+  // applyScrub removed - timeline click now handles time selection directly
 
   async function refreshAllTiles(ts){
     const perfStart = performance.now();
@@ -4437,7 +4388,7 @@
   function animatePanZoomCinematic(cx, cy, finalOffsetX, finalOffsetY, finalScale){
     // CRITICAL: Capture animation ID to prevent old callbacks from executing
     const myAnimationId = currentAnimationId;
-    console.log('🎬 [animatePanZoomCinematic] Starting 3-stage animation', { animId: myAnimationId });
+    // console.log('🎬 [animatePanZoomCinematic] Starting 3-stage animation', { animId: myAnimationId });
 
     // Stage 1: Zoom out to wide view
     const pullbackScale = Math.max(0.3, scale * 0.4); // Zoom out to 40% of current (min 0.3)
@@ -4790,7 +4741,7 @@
       // RESULTS-ONLY MODE: Skip loading all files on initial load
       // User must perform a search first
       if(resultsOnlyMode){
-        resultsEl.innerHTML = '<div class="results-count" style="color: #888; padding: 10px;">Enter a search query to see matching files.</div>';
+        resultsEl.innerHTML = '<div class="results-count" style="color: #888; padding: 10px;"></div>';
         return;
       }
 
@@ -5345,6 +5296,7 @@
 
     try {
       const bg = toMonacoColor(uiColors['--bg'] || '#0a1428');
+      const bgt = toMonacoColor(uiColors['--bg'] + '90' || '#0a1428');
       const fg = toMonacoColor(uiColors['--text'] || '#f0f8ff');
       const accent = toMonacoColor(uiColors['--accent'] || '#39bae6');
       const border = toMonacoColor(uiColors['--border'] || '#44475a');

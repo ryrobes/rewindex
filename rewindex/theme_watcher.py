@@ -249,6 +249,7 @@ class OmarchyThemeWatcher:
         # Build CSS variables
         css_vars = {
             '--bg': bg,
+            '--bgt': self._rgba_from_hex(bg, 0.99),  # Transparent background for tiles
             '--text': text_color,
             '--muted': self._rgba_from_hex(text_color, 0.6),
             '--border': border,

@@ -70,41 +70,52 @@
   <div id="filterPanelsContainer"></div>
 
   <div id="workspace">
-    <div class="search-container">
-      <button id="clearSearch" class="clear-search" title="Clear search">×</button>
-      <input id="q" class="floating-search" type="text" placeholder="Search codebase…" />
-      <button id="pathFilterToggle" class="path-filter-toggle" title="Filter by path prefix">
-        <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor">
-          <path d="M2 3 L6 7 L10 3" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
-        </svg>
-      </button>
-      <button id="deletedToggle" class="deleted-toggle" title="Show deleted files">🗑</button>
-      <button id="partialToggle" class="partial-toggle" title="Toggle partial match">*</button>
-      <button id="fuzzyToggle" class="fuzzy-toggle" title="Toggle fuzzy search">~</button>
-      <div id="pathFilterContainer" class="path-filter-container" style="display:none;">
-        <input id="pathFilter" class="path-filter-input" type="text" placeholder="e.g., repos/rewindex or repos/" />
+    <!-- Unified Search Bar -->
+    <div id="searchBar" class="search-bar">
+      <!-- Row 1: Search + Toggles + Filters + Time Status -->
+      <div class="search-bar-top-row">
+        <div class="search-input-wrapper">
+          <!-- <button id="clearSearch" class="clear-btn" title="Clear search">×</button> -->
+          <input id="q" class="search-input" type="text" placeholder="Search codebase..." />
+        </div>
+
+        <div class="search-toggles">
+          <button id="partialToggle" class="toggle-btn" title="Partial match">*</button>
+          <button id="fuzzyToggle" class="toggle-btn" title="Fuzzy search">~</button>
+          <button id="deletedToggle" class="toggle-btn" title="Show deleted">🗑</button>
+        </div>
+
+        <div class="filter-input-group">
+          <!-- <label class="filter-label">Path:</label> -->
+          <input id="pathFilter" class="filter-input" type="text" placeholder="partial path: e.g., repos/rewindex" />
+        </div>
+
+        <div class="filter-input-group">
+          <!-- <label class="filter-label">Exclude:</label> -->
+          <input id="pathExclude" class="filter-input" type="text" placeholder="exclude: e.g., *.min.js, node_modules/**" />
+        </div>
+
+        <div class="asof-status">
+          <span id="asofLabel" class="asof-label">Live</span>
+        </div>
+      </div>
+
+      <!-- Row 2: Full-width timeline -->
+      <div class="search-bar-timeline-row">
+        <div id="sparkline" class="sparkline-full">
+          <div id="sparkTick" class="tick cur"></div>
+          <div id="sparkHover" class="tick hover" style="display:none;"></div>
+        </div>
+        <button id="goLive" class="go-live-btn" title="Go Live">
+          <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+            <path d="M5 4L12 10L5 16V4Z" fill="currentColor"/>
+            <path d="M12 4L19 10L12 16V4Z" fill="currentColor"/>
+          </svg>
+        </button>
       </div>
     </div>
+
     <div id="canvas"></div>
-    <div id="timeline">
-      <div id="sparkline">
-        <div id="sparkTick" class="tick cur"></div>
-        <div id="sparkHover" class="tick hover" style="display:none;"></div>
-      </div>
-      <div id="scrubWrap" style="display:none">
-        <input id="scrubber" type="range" min="0" max="1000" value="1000" />
-      </div>
-    </div>
-    <div id="asofFloat">
-      <!-- <span class="icon cur"></span> -->
-      <span id="asofLabel"></span>
-      <button id="goLive" class="btn live" title="Go Live">
-        <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
-          <path d="M5 4L12 10L5 16V4Z" fill="currentColor"/>
-          <path d="M12 4L19 10L12 16V4Z" fill="currentColor"/>
-        </svg>
-      </button>
-    </div>
   </div>
   <div id="overlayEditor" class="overlay-editor" style="display:none;">
     <div class="overlay-header">
