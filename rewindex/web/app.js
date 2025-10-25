@@ -2222,6 +2222,7 @@
         return tetrad[lower];
       }
       return interpolateColor(tetrad[lower], tetrad[upper], ratio);
+      // return interpolateColor(tetrad[upper], tetrad[lower], ratio);
     }
 
     // Strategy 2: Use terminal ANSI colors if available
@@ -2447,7 +2448,7 @@
     return prismMap[lang] || lang || 'plaintext';
   }
 
-  async function loadTileContent(path, initData, focusLine = null, searchQuery = null){
+  async function loadTileContent(path, initData, focusLine = null, searchQuery = null, scrollDirection = null){
     const perfStart = performance.now();
     const hadContent = tileContent.has(path);
     const inCache = preloadCache.has(path);
@@ -2478,9 +2479,13 @@
     // CRITICAL: Check if body already has children before clearing
     const oldChildCount = body.children.length;
     if(oldChildCount > 0){
-      console.warn('⚠️  [loadTileContent] Body already has content, clearing', {
-        oldChildren: oldChildCount
-      });
+      // Only warn if we're unexpectedly reloading (not for focus line changes)
+      if(!focusLine){
+        console.warn('⚠️  [loadTileContent] Body already has content, clearing', {
+          oldChildren: oldChildCount,
+          path: path.split('/').pop()
+        });
+      }
     }
 
     // Update language in title and apply color
@@ -2526,25 +2531,96 @@
 
     let startLine = 1;
     let endLine = totalLines;
+    let extendedChunkForScroll = false;
+    let scrollAnimationData = null; // {direction, targetLine, prependedLines, appendedLines}
 
     // Check if there's a pending focus for this path
     const pending = pendingFocus.get(path);
     if(pending && pending.line){
       focusLine = pending.line;
+      // Preserve direction from pending focus if available
+      if(pending.direction && !scrollDirection){
+        scrollDirection = pending.direction;
+        console.log(`📌 [loadTileContent] Using pending scroll direction: ${scrollDirection}`);
+      }
       pendingFocus.delete(path); // Clear after using
     }
 
     if(totalLines > MAX_LINES_TO_RENDER){
       if(focusLine && focusLine > 0){
-        // Center around the focus line
+        // Get current chunk info to determine scroll direction
+        const tile = tiles.get(path);
+        const body = tile && tile.querySelector('.body');
+        const pre = body && body.querySelector('pre.prism-code');
+        const currentChunkStart = pre ? (parseInt(pre.getAttribute('data-chunk-start')) || 1) : 1;
+        const currentChunkEnd = pre ? (parseInt(pre.getAttribute('data-chunk-end')) || totalLines) : totalLines;
+
+        // Calculate current visible line (approximate from scroll position)
+        let currentVisibleLine = currentChunkStart;
+        if(pre && pre.scrollTop > 0){
+          const computedStyle = window.getComputedStyle(pre);
+          const currentFontSize = parseFloat(computedStyle.fontSize) || fontSize;
+          const currentLineHeight = parseFloat(computedStyle.lineHeight) || currentFontSize * 1.4;
+          const scrolledLines = Math.floor(pre.scrollTop / currentLineHeight);
+          currentVisibleLine = currentChunkStart + scrolledLines;
+        }
+
+        // Determine scroll direction
+        const direction = scrollDirection || (focusLine < currentVisibleLine ? 'up' : 'down');
+
+        console.log(`🎯 [loadTileContent] Smart chunking:`, {
+          focusLine,
+          currentVisible: currentVisibleLine,
+          currentChunk: `${currentChunkStart}-${currentChunkEnd}`,
+          direction,
+          explicitDirection: scrollDirection
+        });
+
+        // Center the target line in main chunk
         const halfChunk = Math.floor(MAX_LINES_TO_RENDER / 2);
         startLine = Math.max(1, focusLine - halfChunk);
         endLine = Math.min(totalLines, startLine + MAX_LINES_TO_RENDER - 1);
 
-        // Adjust if we're near the end
-        if(endLine - startLine + 1 < MAX_LINES_TO_RENDER && startLine > 1){
-          startLine = Math.max(1, endLine - MAX_LINES_TO_RENDER + 1);
+        // EXTENDED CHUNK TRICK: Add buffer lines for smooth scroll animation
+        const SCROLL_BUFFER = 150; // Extra lines for animation
+        let prependedLines = 0;
+        let appendedLines = 0;
+
+        if(direction === 'up' && endLine < totalLines){
+          // Scrolling UP: append extra lines AFTER to scroll up from
+          const oldEnd = endLine;
+          endLine = Math.min(totalLines, endLine + SCROLL_BUFFER);
+          appendedLines = endLine - oldEnd;
+          extendedChunkForScroll = true;
+          console.log(`  ⬆️  Extended chunk for UP scroll: appended ${appendedLines} lines (${oldEnd+1}-${endLine})`);
+        } else if(direction === 'down' && startLine > 1){
+          // Scrolling DOWN: prepend extra lines BEFORE to scroll down through
+          const oldStart = startLine;
+          startLine = Math.max(1, startLine - SCROLL_BUFFER);
+          prependedLines = oldStart - startLine;
+          extendedChunkForScroll = true;
+          console.log(`  ⬇️  Extended chunk for DOWN scroll: prepended ${prependedLines} lines (${startLine}-${oldStart-1})`);
         }
+
+        if(extendedChunkForScroll){
+          scrollAnimationData = {
+            direction,
+            targetLine: focusLine,
+            prependedLines,
+            appendedLines
+          };
+        }
+
+        // Adjust if we're near the edges
+        if(endLine - startLine + 1 < MAX_LINES_TO_RENDER){
+          if(startLine > 1){
+            startLine = Math.max(1, endLine - MAX_LINES_TO_RENDER + 1);
+          } else if(endLine < totalLines){
+            endLine = Math.min(totalLines, startLine + MAX_LINES_TO_RENDER - 1);
+          }
+        }
+
+        console.log(`  → Final chunk: ${startLine}-${endLine} (${endLine - startLine + 1} lines)${extendedChunkForScroll ? ' [EXTENDED]' : ''}`);
       } else {
         // Just show first chunk
         startLine = 1;
@@ -2562,6 +2638,7 @@
     const pre = document.createElement('pre');
     pre.className = 'prism-code line-numbers'; // Add line-numbers class
     pre.style.fontSize = `${fontSize}px`;
+    pre.style.marginTop = `0px`;
     pre.style.lineHeight = '1.4'; // Ensure readability
     pre.style.userSelect = 'text'; // Allow text selection
     pre.style.cursor = 'text'; // Show text cursor
@@ -2569,6 +2646,14 @@
     pre.setAttribute('data-total-lines', String(totalLines)); // Store total for reference
     pre.setAttribute('data-chunk-start', String(startLine));
     pre.setAttribute('data-chunk-end', String(endLine));
+
+    // Store extended chunk metadata for scroll animation
+    if(scrollAnimationData){
+      pre.setAttribute('data-scroll-direction', scrollAnimationData.direction);
+      pre.setAttribute('data-scroll-target', String(scrollAnimationData.targetLine));
+      pre.setAttribute('data-prepended-lines', String(scrollAnimationData.prependedLines));
+      pre.setAttribute('data-appended-lines', String(scrollAnimationData.appendedLines));
+    }
 
     const code = document.createElement('code');
     code.className = `language-${prismLang}`;
@@ -2613,10 +2698,10 @@
 
     // Scroll to focused line if provided
     if(focusLine && focusLine > 0){
-      // Use a short delay to ensure Prism has finished rendering
+      // Wait for Prism to finish rendering and layout to stabilize
       setTimeout(() => {
-        scrollToLine(path, focusLine);
-      }, 100);
+        scrollToLine(path, focusLine, scrollDirection, scrollAnimationData);
+      }, 150);
     }
 
     setupTileButtons(path);
@@ -2638,6 +2723,26 @@
   function highlightSearchTerms(element, query){
     const perfStart = performance.now();
     console.log('🔍 [highlightSearchTerms] START', { query });
+
+    // Check if already highlighted with this query to avoid re-processing
+    const alreadyHighlighted = element.getAttribute('data-highlighted-query');
+    if(alreadyHighlighted === query){
+      console.log(`  ⏭️  Already highlighted with query "${query}", skipping`);
+      return;
+    }
+
+    // CRITICAL: Remove existing search highlights to prevent layering
+    const existingMarks = element.querySelectorAll('mark.search-highlight');
+    if(existingMarks.length > 0){
+      console.log(`  🧹 Clearing ${existingMarks.length} existing highlights`);
+      existingMarks.forEach(mark => {
+        // Replace mark with its text content
+        const textNode = document.createTextNode(mark.textContent);
+        mark.parentNode.replaceChild(textNode, mark);
+      });
+      // Normalize to merge adjacent text nodes
+      element.normalize();
+    }
 
     // Escape regex special characters
     const escapedQuery = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -2695,6 +2800,9 @@
 
       textNode.parentNode.replaceChild(fragment, textNode);
     });
+
+    // Mark as highlighted with this query
+    element.setAttribute('data-highlighted-query', query);
 
     const perfEnd = performance.now();
     console.log('✅ [highlightSearchTerms] END', {
@@ -4652,6 +4760,14 @@
       leaked: domChildrenAfter > 0 ? domChildrenAfter : 0
     });
 
+    // Sort files by path for spatial coherence (files in same folder are nearby)
+    // Results panel already shows score-sorted order, so canvas can show path-sorted
+    list.sort((a, b) => a.localeCompare(b));
+    console.log('📂 [refreshAllTiles] Sorted by path for spatial grouping', {
+      first: list[0],
+      last: list[list.length - 1]
+    });
+
     // Use treemap (flat or with folders), simple grid (results-only), or traditional layout based on mode
     if(treemapMode && treemapFoldersMode){
       const tree = buildTree(list);
@@ -4878,7 +4994,7 @@
     animHandle = requestAnimationFrame(step);
   }
 
-  function scrollToLine(path, line){
+  function scrollToLine(path, line, explicitDirection = null, animData = null){
     const tile = tiles.get(path);
     if(!tile || !line) return;
 
@@ -4889,39 +5005,185 @@
     const code = pre.querySelector('code');
     if(!code) return;
 
-    // Get chunk info
+    // Get chunk info and extended chunk metadata
     const chunkStart = parseInt(pre.getAttribute('data-chunk-start')) || 1;
     const chunkEnd = parseInt(pre.getAttribute('data-chunk-end')) || 999999;
     const totalLines = parseInt(pre.getAttribute('data-total-lines')) || 0;
+    const storedDirection = pre.getAttribute('data-scroll-direction');
+    const prependedLines = parseInt(pre.getAttribute('data-prepended-lines')) || 0;
+    const appendedLines = parseInt(pre.getAttribute('data-appended-lines')) || 0;
+
+    // Calculate current visible line from scroll position
+    const computedStyle = window.getComputedStyle(pre);
+    const fontSize = parseFloat(computedStyle.fontSize);
+    const lineHeight = parseFloat(computedStyle.lineHeight) || fontSize * 1.4;
+    const currentScrolledLines = Math.floor(pre.scrollTop / lineHeight);
+    const currentVisibleLine = chunkStart + currentScrolledLines;
+
+    // Use explicit direction if provided, otherwise try stored direction, otherwise calculate
+    const direction = explicitDirection || storedDirection || (line < currentVisibleLine ? 'up' : 'down');
+
+    // Clear stored metadata after reading
+    if(storedDirection){
+      pre.removeAttribute('data-scroll-direction');
+      pre.removeAttribute('data-scroll-target');
+      pre.removeAttribute('data-prepended-lines');
+      pre.removeAttribute('data-appended-lines');
+    }
+
+    console.log(`📜 [scrollToLine] State:`, {
+      targetLine: line,
+      currentVisibleLine,
+      currentScrollTop: pre.scrollTop.toFixed(0),
+      direction,
+      explicitDirection,
+      storedDirection,
+      chunkRange: `${chunkStart}-${chunkEnd}`,
+      prependedLines,
+      appendedLines,
+      hasExtended: prependedLines > 0 || appendedLines > 0,
+      scrollHeight: pre.scrollHeight,
+      clientHeight: pre.clientHeight
+    });
 
     // Check if target line is in the current chunk
     if(line < chunkStart || line > chunkEnd){
       // Line is not in current chunk - need to reload with focus on that line
-      pendingFocus.set(path, { line });
-      loadTileContent(path, null, line).catch(e => {/* ignore */});
+      console.log(`  → Need chunk reload: line ${line} not in current chunk ${chunkStart}-${chunkEnd}, direction: ${direction}`);
+
+      // Prevent reload loops: check if we already have a pending focus for this exact line
+      const existingPending = pendingFocus.get(path);
+      if(existingPending && existingPending.line === line){
+        console.warn(`  ⚠️  Already reloading to line ${line}, skipping duplicate reload`);
+        return;
+      }
+
+      pendingFocus.set(path, { line, direction }); // Store direction for after reload
+      loadTileContent(path, null, line, null, direction).catch(e => {/* ignore */});
       return;
     }
 
-    // Wait a tick for Prism to finish rendering, then scroll
+    // Wait for Prism to finish rendering
     requestAnimationFrame(() => {
       // Line is in chunk - calculate position relative to chunk
       const relativeLineIndex = line - chunkStart; // 0-based index within chunk
+      const linePositionInChunk = relativeLineIndex * lineHeight;
+      const viewportHeight = pre.clientHeight;
+      const currentScroll = pre.scrollTop;
 
-      // Get actual computed line height (after Prism rendering)
-      const computedStyle = window.getComputedStyle(pre);
-      const fontSize = parseFloat(computedStyle.fontSize);
-      const lineHeight = parseFloat(computedStyle.lineHeight) || fontSize * 1.4;
-
-      // Calculate scroll position (relative to chunk)
-      const scrollTop = relativeLineIndex * lineHeight;
-
-      // Smooth scroll to position (target line at top third of viewport)
-      const targetScroll = Math.max(0, scrollTop - (pre.clientHeight / 3));
-      pre.scrollTo({
-        top: targetScroll,
-        behavior: 'smooth'
+      console.log(`  🔍 Scroll calculation:`, {
+        targetLine: line,
+        lineInChunk: relativeLineIndex,
+        linePosition: linePositionInChunk.toFixed(0),
+        currentScroll: currentScroll.toFixed(0),
+        direction,
+        prependedLines,
+        appendedLines
       });
 
+      // Calculate target scroll position
+      let targetScroll;
+      if(direction === 'up'){
+        // Position target line in center of viewport
+        targetScroll = Math.max(0, linePositionInChunk - (viewportHeight / 2));
+      } else {
+        // Position target line in top third
+        targetScroll = Math.max(0, linePositionInChunk - (viewportHeight / 3));
+      }
+
+      // Handle extended chunks with prepended/appended content
+      const hasAppended = appendedLines > 0;
+      const hasPrepended = prependedLines > 0;
+
+      console.log(`  📦 Extended chunk check:`, {
+        hasAppended,
+        hasPrepended,
+        direction,
+        willUseUpTrick: hasAppended && direction === 'up',
+        willUseDownTrick: hasPrepended && direction === 'down'
+      });
+
+      if(hasAppended && direction === 'up'){
+        // UP scroll with appended buffer: Start at bottom of chunk, animate UP to target
+        const maxScroll = Math.max(0, pre.scrollHeight - viewportHeight);
+        const startScroll = Math.min(maxScroll, linePositionInChunk + (viewportHeight * 0.8));
+
+        console.log(`  ⬆️  [UP EXTENDED] Using appended buffer`, {
+          appendedLines,
+          linePositionInChunk: linePositionInChunk.toFixed(0),
+          startScroll: startScroll.toFixed(0),
+          targetScroll: targetScroll.toFixed(0),
+          delta: (startScroll - targetScroll).toFixed(0),
+          maxScroll: maxScroll.toFixed(0)
+        });
+
+        // Set start position instantly
+        pre.scrollTop = startScroll;
+        console.log(`  ⬆️  Set scrollTop to ${pre.scrollTop.toFixed(0)}px`);
+
+        // Animate UP to target after brief delay
+        setTimeout(() => {
+          const beforeScroll = pre.scrollTop;
+          console.log(`  ⬆️  NOW ANIMATING UP: ${beforeScroll.toFixed(0)}px → ${targetScroll.toFixed(0)}px`);
+          pre.scrollTo({ top: targetScroll, behavior: 'smooth' });
+
+          // Verify scroll started
+          setTimeout(() => {
+            console.log(`  ⬆️  After 200ms: scrollTop = ${pre.scrollTop.toFixed(0)}px`);
+          }, 200);
+
+          // Add highlight after animation
+          setTimeout(() => addLineHighlight(pre, relativeLineIndex), 700);
+        }, 120);
+
+        return; // Animation scheduled
+      } else if(prependedLines > 0 && direction === 'down'){
+        // DOWN scroll with prepended buffer: Start at top, scroll DOWN to target
+        console.log(`  ⬇️  [DOWN with ${prependedLines} prepended lines]`, {
+          targetScroll: targetScroll.toFixed(0),
+          prependedLines
+        });
+
+        // Start at top
+        pre.scrollTop = 0;
+
+        // Animate DOWN to target after brief delay
+        setTimeout(() => {
+          console.log(`  ⬇️  Animating DOWN from 0px to ${targetScroll.toFixed(0)}px`);
+          pre.scrollTo({ top: targetScroll, behavior: 'smooth' });
+
+          // Add highlight after animation
+          setTimeout(() => addLineHighlight(pre, relativeLineIndex), 600);
+        }, 100);
+
+        return; // Animation scheduled
+      }
+
+      // Normal scrolling (no extended chunk or within existing chunk)
+      const scrollDelta = Math.abs(targetScroll - currentScroll);
+      const shouldAnimate = scrollDelta > 20;
+
+      console.log(`  → Normal scroll ${direction}:`, {
+        from: currentScroll.toFixed(0),
+        to: targetScroll.toFixed(0),
+        delta: scrollDelta.toFixed(0),
+        willAnimate: shouldAnimate,
+        scrollHeight: pre.scrollHeight,
+        viewportHeight
+      });
+
+      // Always use smooth behavior for any visible movement
+      pre.scrollTo({
+        top: targetScroll,
+        behavior: shouldAnimate ? 'smooth' : 'instant'
+      });
+
+      // Add line highlight after scroll completes
+      setTimeout(() => addLineHighlight(pre, relativeLineIndex), shouldAnimate ? 600 : 100);
+    });
+
+    // Extracted highlight logic
+    function addLineHighlight(pre, relativeLineIndex){
       // Remove previous highlights
       const existingHighlights = pre.querySelectorAll('.highlight-line, .highlight-line-fade');
       existingHighlights.forEach(el => {
@@ -4947,7 +5209,7 @@
           }
         }, 1000);
       }
-    });
+    }
   }
 
   function focusResult(r){
@@ -4963,11 +5225,28 @@
     const query = qEl.value.trim(); // Get current search query
     openTile(path).then(async ()=>{
       centerOnTile(path);
+
+      // Check if line is in current chunk before reloading
+      const tile = tiles.get(path);
+      const pre = tile && tile.querySelector('.body pre.prism-code');
+      const chunkStart = pre ? parseInt(pre.getAttribute('data-chunk-start')) || 0 : 0;
+      const chunkEnd = pre ? parseInt(pre.getAttribute('data-chunk-end')) || 0 : 0;
+      const lineInChunk = line && chunkStart > 0 && line >= chunkStart && line <= chunkEnd;
+
       if(!tileContent.has(path)){
-        await loadTileContent(path, null, line, query); // Pass line and query
+        await loadTileContent(path, null, line, query);
+      } else if(line && lineInChunk){
+        // Line already in chunk - just scroll without reloading!
+        console.log(`  ✓ Line ${line} already in chunk ${chunkStart}-${chunkEnd}, scrolling only`);
+        scrollToLine(path, line);
+        // DON'T re-highlight - manipulating DOM after Prism breaks line number alignment
       } else if(line){
-        // Content exists, but may need to reload chunk centered on line with highlighting
-        await loadTileContent(path, null, line, query); // Reload with query for highlighting
+        // Line not in chunk - reload with extended chunk for smooth scroll
+        console.log(`  ↻ Line ${line} not in chunk ${chunkStart}-${chunkEnd}, reloading`);
+        await loadTileContent(path, null, line, query);
+      } else {
+        // No line to focus, just ensure content is loaded
+        if(!pre) await loadTileContent(path, null, null, query);
       }
       flashTile(path, 'focus');
     });
@@ -4977,11 +5256,29 @@
     const query = token || qEl.value.trim(); // Use token or current search query
     openTile(path).then(async ()=>{
       centerOnTile(path);
+
+      // Check if line is in current chunk before reloading
+      const tile = tiles.get(path);
+      const pre = tile && tile.querySelector('.body pre.prism-code');
+      const chunkStart = pre ? parseInt(pre.getAttribute('data-chunk-start')) || 0 : 0;
+      const chunkEnd = pre ? parseInt(pre.getAttribute('data-chunk-end')) || 0 : 0;
+      const lineInChunk = line && chunkStart > 0 && line >= chunkStart && line <= chunkEnd;
+
       if(!tileContent.has(path)){
-        await loadTileContent(path, null, line, query); // Pass line and query
-      } else if(line){
-        // Content exists, but may need to reload chunk centered on line with highlighting
-        await loadTileContent(path, null, line, query); // Reload with query for highlighting
+        await loadTileContent(path, null, line, query);
+      } else if(lineInChunk){
+        // Line already in chunk - just scroll without reloading!
+        console.log(`  ✓ Line ${line} already in chunk ${chunkStart}-${chunkEnd}, scrolling`);
+        scrollToLine(path, line);
+        // Update highlighting if needed
+        if(query && pre){
+          const code = pre.querySelector('code');
+          if(code) highlightSearchTerms(code, query);
+        }
+      } else {
+        // Line not in chunk - reload with extended chunk for smooth scroll
+        console.log(`  ↻ Line ${line} not in chunk ${chunkStart}-${chunkEnd}, reloading`);
+        await loadTileContent(path, null, line, query);
       }
       flashTile(path, 'focus');
     });
@@ -5020,8 +5317,9 @@
       return;
     }
 
-    // Sort by count descending
-    const sorted = Object.entries(counts).sort((a, b) => b[1] - a[1]);
+    // Sort by count descending and reverse
+    const sorted = Object.entries(counts).sort((a, b) => b[1] - a[1]); //.reverse();
+    
 
     // Render stacked bar
     languageBarEl.innerHTML = '';

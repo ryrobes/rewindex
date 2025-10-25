@@ -311,35 +311,57 @@ def _compute_line_context(content: str, highlight_fragment: str, query: str, con
 
     lines = content.splitlines()
 
-    # NEW STRATEGY: Find where the fragment text appears in the content
-    # Strip <mark> tags from fragment to get clean text
+    # NEW STRATEGY: Find where the MARKED TEXT appears within the fragment
+    # Each ES fragment is a unique snippet - we need to find its exact location
     if highlight_fragment:
-        clean_fragment = re.sub(r'</?mark>', '', highlight_fragment)
-        # Try to find a unique substring from the fragment (at least 20 chars)
-        search_text = clean_fragment.strip()
-        if len(search_text) >= 20:
-            # Use a substantial substring to locate this specific fragment
-            search_substring = search_text[:60]  # Use first 60 chars
-            pos = content.find(search_substring)
-            if pos >= 0:
-                # Found it! Count newlines before this position
-                line_no = content.count("\n", 0, pos) + 1
-                idx_line = line_no - 1
-                if 0 <= idx_line < len(lines):
-                    line_text = lines[idx_line]
-                    # Extract marked tokens and apply highlighting
-                    marked_tokens = _all_marked_tokens(highlight_fragment)
-                    hl_line = line_text
-                    if apply_markup and marked_tokens:
-                        lowered_tokens = [t.lower() for t in marked_tokens if t]
-                        for tok in sorted(set(lowered_tokens), key=len, reverse=True):
-                            pattern = re.compile(re.escape(tok), re.IGNORECASE)
-                            hl_line = pattern.sub(lambda m: f"<mark>{m.group(0)}</mark>", hl_line)
-                    start_ctx = max(0, idx_line - max(0, int(context_lines)))
-                    end_ctx = min(len(lines), idx_line + 1 + max(0, int(context_lines)))
-                    before = lines[start_ctx:idx_line]
-                    after = lines[idx_line + 1:end_ctx]
-                    return line_no, before, after, hl_line
+        # Extract marked tokens (handles both <mark> and <em> tags)
+        marked_tokens = _all_marked_tokens(highlight_fragment)
+        if not marked_tokens:
+            marked_tokens = re.findall(r"<em>(.*?)</em>", highlight_fragment)
+
+        if marked_tokens and highlight_fragment:
+            # Find where this specific fragment appears in content
+            # Strip tags to get clean fragment text
+            clean_fragment = re.sub(r'</?mark>|</?em>', '', highlight_fragment)
+
+            # Use first 60 chars to locate fragment in content
+            search_substring = clean_fragment[:60] if len(clean_fragment) >= 20 else clean_fragment
+            fragment_start_pos = content.find(search_substring)
+
+            if fragment_start_pos >= 0:
+                # Find where the FIRST marked token appears WITHIN the fragment
+                first_token = marked_tokens[0]
+                # Find offset of marked token within the clean fragment
+                token_offset_in_fragment = clean_fragment.lower().find(first_token.lower())
+
+                if token_offset_in_fragment >= 0:
+                    # Calculate absolute position of the match in content
+                    match_pos = fragment_start_pos + token_offset_in_fragment
+                    line_no = content.count("\n", 0, match_pos) + 1
+                    idx_line = line_no - 1
+
+                    if 0 <= idx_line < len(lines):
+                        line_text = lines[idx_line]
+                        # Build highlight for this line
+                        hl_line = line_text
+                        if apply_markup:
+                            lowered_tokens = [t.lower() for t in marked_tokens if t]
+                            for tok in sorted(set(lowered_tokens), key=len, reverse=True):
+                                pattern = re.compile(re.escape(tok), re.IGNORECASE)
+                                hl_line = pattern.sub(lambda m: f"<mark>{m.group(0)}</mark>", hl_line)
+                        start_ctx = max(0, idx_line - max(0, int(context_lines)))
+                        end_ctx = min(len(lines), idx_line + 1 + max(0, int(context_lines)))
+                        before = lines[start_ctx:idx_line]
+                        after = lines[idx_line + 1:end_ctx]
+                        return line_no, before, after, hl_line
+                else:
+                    # Token not found in fragment - fall through to other strategies
+                    import logging
+                    logging.getLogger(__name__).debug(f"Token '{first_token}' not found in fragment")
+            else:
+                # Fragment not found in content - try other strategies
+                import logging
+                logging.getLogger(__name__).debug(f"Fragment not found in content (searched for: {search_substring[:40]})")
 
     # OLD STRATEGY (fallback): Find line with most marked tokens
     marked_tokens = _all_marked_tokens(highlight_fragment)
@@ -455,16 +477,27 @@ def _compute_line_context(content: str, highlight_fragment: str, query: str, con
 
 
 def _strip_mark_tags(s: str) -> str:
-    return re.sub(r"</?mark>", "", s or "")
+    # Strip both <mark> and <em> tags
+    s = re.sub(r"</?mark>", "", s or "")
+    s = re.sub(r"</?em>", "", s)
+    return s
 
 
 def _first_marked_token(s: str) -> Optional[str]:
+    # Try <mark> first, then <em>
     m = re.search(r"<mark>(.*?)</mark>", s or "")
+    if m and m.group(1):
+        return m.group(1)
+    m = re.search(r"<em>(.*?)</em>", s or "")
     return m.group(1) if m and m.group(1) else None
 
 
 def _all_marked_tokens(s: str) -> List[str]:
-    return re.findall(r"<mark>(.*?)</mark>", s or "")
+    # Extract both <mark> and <em> tags
+    tokens = re.findall(r"<mark>(.*?)</mark>", s or "")
+    if not tokens:
+        tokens = re.findall(r"<em>(.*?)</em>", s or "")
+    return tokens
 
 
 def _first_query_token(q: str) -> Optional[str]:
