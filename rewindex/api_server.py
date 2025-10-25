@@ -102,10 +102,22 @@ class RewindexHandler(BaseHTTPRequestHandler):
     theme_watcher: OmarchyThemeWatcher | None = None  # Omarchy theme integration
     theme_poll_thread: threading.Thread | None = None
     theme_poll_stop: threading.Event | None = None
+    # Cache config to avoid reloading on every request
+    cached_config: Config | None = None
+    cached_config_root: Path | None = None
+
+    def log_message(self, format, *args):
+        """Override to suppress HTTP request logging spam."""
+        # Comment this out to re-enable HTTP logging:
+        pass
 
     def do_GET(self) -> None:  # noqa: N802
         root = find_project_root(Path.cwd())
-        cfg = Config.load(root)
+        # Use cached config if available
+        if RewindexHandler.cached_config_root != root:
+            RewindexHandler.cached_config = Config.load(root)
+            RewindexHandler.cached_config_root = root
+        cfg = RewindexHandler.cached_config
         parsed = urlparse(self.path)
         path_only = parsed.path
         qs = parse_qs(parsed.query)
@@ -598,7 +610,11 @@ class RewindexHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:  # noqa: N802
         root = find_project_root(Path.cwd())
-        cfg = Config.load(root)
+        # Use cached config if available
+        if RewindexHandler.cached_config_root != root:
+            RewindexHandler.cached_config = Config.load(root)
+            RewindexHandler.cached_config_root = root
+        cfg = RewindexHandler.cached_config
         if self.path == "/search/simple":
             try:
                 length = int(self.headers.get("Content-Length", "0"))

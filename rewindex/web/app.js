@@ -1185,8 +1185,13 @@
     // Get file paths from previous stage
     let allowedFilePaths;
     if(panelIndex === 0){
-      // First filter: search within primary results
-      allowedFilePaths = lastSearchResults.map(r => r.file_path);
+      // First filter: search within primary results (with language filter if active)
+      let baseResults = lastSearchResults;
+      if(currentLanguageFilter){
+        baseResults = lastSearchResults.filter(r => r.language === currentLanguageFilter);
+        console.log(`  🎨 Language filter active: ${currentLanguageFilter} (${baseResults.length}/${lastSearchResults.length} files)`);
+      }
+      allowedFilePaths = baseResults.map(r => r.file_path);
     } else {
       // Subsequent filters: search within previous filter's results
       const prevPanel = filterPanels[panelIndex - 1];
@@ -1194,6 +1199,18 @@
     }
 
     console.log(`🔍 [Filter ${panelIndex + 1}] Searching within ${allowedFilePaths.length} files from previous stage`);
+
+    // SHORT CIRCUIT: If previous stage has zero files, we must also have zero
+    if(allowedFilePaths.length === 0){
+      console.log(`  ⚠️  Previous stage has 0 files, short-circuiting to 0 results`);
+      panel.results = [];
+      panel.rawResults = [];
+      if(spinner) spinner.style.display = 'none';
+      if(resultsContent) resultsContent.style.display = 'block';
+      renderFilterPanelResults(panel);
+      if(!skipHighlighting) updateAllFilterHighlighting();
+      return;
+    }
 
     // Search via API with file_paths filter
     const body = {
@@ -5415,6 +5432,11 @@
           // Re-run the search for this panel (will cascade from new filtered base)
           await updateFilterPanel(panel.id, true); // skipHighlighting=true
         }
+      }
+      // Update highlighting once after all panels recalculated
+      if(filterPanels.length > 0){
+        console.log('🎨 Updating filter highlighting after language filter change');
+        updateAllFilterHighlighting();
       }
     }
     // In show-all mode, apply dimming

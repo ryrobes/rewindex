@@ -982,8 +982,9 @@ body {
   padding: 12px 14px;
   /* width: 290px; */
   margin-left: 15px;
-  background: #0b0e1455;
-  border: 1px solid #1f2430;
+  /* background: #0b0e1455; */
+  backdrop-filter: blur(8px);;
+  border-bottom: 2px solid var(--accent-border);
   transition: all 0.2s ease;
 }
 
@@ -1135,15 +1136,22 @@ body {
 
 /* Cross-panel highlight (when file is selected in another panel) */
 .result-file-header.cross-highlight {
-  background: rgba(255, 215, 0, 0.15);
+  /* background: rgba(255, 215, 0, 0.15);
   border-left: 3px solid rgba(255, 215, 0, 0.6);
+   */
+
+   border-left: 3px solid var(--accent);
   padding-left: 5px;
   animation: cross-highlight-pulse 1s ease-in-out;
+  filter: brightness(150%);
+
+  background: var(--accent-subtle);
+  /* box-shadow: 0 0 12px var(--accent), 0 0 4px var(--accent-opaque); */
 }
 
 @keyframes cross-highlight-pulse {
-  0%, 100% { background: rgba(255, 215, 0, 0.15); }
-  50% { background: rgba(255, 215, 0, 0.25); }
+  0%, 100% { background: var(--accent-subtle); }
+  50% { background: var(--accent-bright); }
 }
 
 .result-file {

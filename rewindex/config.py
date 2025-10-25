@@ -116,6 +116,12 @@ def load_gitignore_patterns(project_root: Path) -> List[str]:
     return parse_gitignore(gitignore_path)
 
 
+def load_rewindexignore_patterns(project_root: Path) -> List[str]:
+    """Load patterns from .rewindexignore file in project root."""
+    rewindexignore_path = project_root / '.rewindexignore'
+    return parse_gitignore(rewindexignore_path)  # Same format as .gitignore
+
+
 @dataclass
 class IndexingWatch:
     enabled: bool = True
@@ -230,6 +236,15 @@ class Config:
             for pattern in gitignore_patterns:
                 if pattern not in existing:
                     cfg.indexing.exclude_patterns.append(pattern)
+
+        # Load .rewindexignore patterns (same format as .gitignore)
+        rewindexignore_patterns = load_rewindexignore_patterns(project_root)
+        if rewindexignore_patterns:
+            existing = set(cfg.indexing.exclude_patterns)
+            for pattern in rewindexignore_patterns:
+                if pattern not in existing:
+                    cfg.indexing.exclude_patterns.append(pattern)
+            print(f"[config] Loaded {len(rewindexignore_patterns)} patterns from .rewindexignore")
 
         return cfg
 

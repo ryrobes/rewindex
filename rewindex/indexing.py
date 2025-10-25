@@ -247,18 +247,23 @@ def poll_watch(
     from datetime import datetime
 
     print("[rewindex] Polling file watcher started (Ctrl+C to stop)...")
+    print(f"[rewindex] Config: interval={interval_s}s, debounce={cfg.indexing.watch.debounce_ms}ms")
+    print(f"[rewindex] Project root: {project_root}")
+
     iteration = 0
     consecutive_errors = 0
     last_update_time = datetime.now()
+    total_files_updated = 0
 
     try:
         while True:
             iteration += 1
+            iteration_start = datetime.now()
 
             # Heartbeat every 60 iterations (~1 minute if interval=1s)
             if iteration % 60 == 0:
                 elapsed = (datetime.now() - last_update_time).total_seconds()
-                print(f"[rewindex] 💓 Watcher heartbeat (iteration {iteration}, {elapsed:.1f}s since last update)")
+                print(f"[rewindex] 💓 Watcher heartbeat (iteration {iteration}, {elapsed:.1f}s since last update, {total_files_updated} total files updated)")
 
             if stop_event is not None and stop_event.is_set():
                 print("[rewindex] Watcher stop event received")
@@ -271,15 +276,18 @@ def poll_watch(
                 if any(res.values()):
                     last_update_time = datetime.now()
                     timestamp = last_update_time.strftime("%H:%M:%S")
-                    print(f"[rewindex] [{timestamp}] index update: {res}")
+                    total_files_updated += sum(res.values())
+                    print(f"[rewindex] [{timestamp}] index update: {res} (total updates: {total_files_updated})")
                     if on_update is not None:
                         try:
                             on_update(res)
                         except Exception as e:
                             print(f"[rewindex] WARNING: on_update callback failed: {e}")
+                # Don't log when idle (reduces spam)
             except Exception as e:
                 consecutive_errors += 1
-                print(f"[rewindex] ERROR in watcher loop (error #{consecutive_errors}): {e}")
+                timestamp = datetime.now().strftime("%H:%M:%S")
+                print(f"[rewindex] [{timestamp}] ERROR in watcher loop (error #{consecutive_errors}): {e}")
                 import traceback
                 traceback.print_exc()
 
@@ -287,6 +295,11 @@ def poll_watch(
                 if consecutive_errors >= 5:
                     print("[rewindex] FATAL: Too many consecutive errors, stopping watcher")
                     break
+
+            # Log iteration timing if it's unusually slow
+            iteration_duration = (datetime.now() - iteration_start).total_seconds()
+            if iteration_duration > 10:
+                print(f"[rewindex] ⚠️  Slow iteration: {iteration_duration:.1f}s (iteration {iteration})")
 
             time.sleep(max(interval_s, cfg.indexing.watch.debounce_ms / 1000.0))
 
@@ -456,6 +469,12 @@ if WATCHDOG_AVAILABLE:
             # Stats tracking
             self.stats_lock = threading.Lock()
             self.pending_stats = {"added": 0, "updated": 0, "skipped": 0}
+            self.events_processed = 0  # Total events handled
+            self.events_ignored = 0  # Events filtered out by patterns
+            self.pending_files: set = set()  # Files waiting to be processed
+
+            # Logging
+            self.log_indexed_files = True  # Enable file logging for debugging
 
             # Batch processing timer
             self.batch_timer: Optional[threading.Timer] = None
@@ -473,10 +492,29 @@ if WATCHDOG_AVAILABLE:
 
         def _process_file(self, file_path: Path):
             """Process a single file change."""
-            if not self._should_process(str(file_path)):
+            self.events_processed += 1
+            path_str = str(file_path)
+
+            if not self._should_process(path_str):
+                # Debounced - add to pending but don't process yet
+                self.pending_files.add(path_str)
                 return
 
+            # Remove from pending (if it was there)
+            self.pending_files.discard(path_str)
+
             action = index_single_file(file_path, self.project_root, self.cfg, self.on_event)
+
+            # Only log actual changes (added/updated), not skipped files
+            if action and action != 'skipped' and self.log_indexed_files:
+                from datetime import datetime
+                timestamp = datetime.now().strftime("%H:%M:%S")
+                # Get relative path for cleaner logging
+                try:
+                    rel = file_path.relative_to(self.project_root)
+                    print(f"[rewindex] [{timestamp}] {action.upper()}: {rel}")
+                except:
+                    print(f"[rewindex] [{timestamp}] {action.upper()}: {file_path}")
 
             if action:
                 with self.stats_lock:
@@ -501,28 +539,91 @@ if WATCHDOG_AVAILABLE:
             self.batch_timer = threading.Timer(0.5, broadcast)
             self.batch_timer.start()
 
+        def _should_ignore_path(self, path_str: str) -> bool:
+            """Check if path should be ignored by watcher."""
+            # Convert absolute path to relative for pattern matching
+            try:
+                abs_path = Path(path_str)
+                rel_path = abs_path.relative_to(self.project_root)
+                rel_str = str(rel_path)
+            except (ValueError, Exception):
+                # Path is outside project root or invalid - ignore it
+                self.events_ignored += 1
+                return True
+
+            # Use the same exclusion patterns as indexing
+            # This respects .gitignore, .rewindexignore, and built-in patterns
+            if _match_any(self.cfg.indexing.exclude_patterns, rel_str):
+                self.events_ignored += 1
+                return True
+
+            # Also check if _should_index_file would reject it
+            # This ensures watcher and indexer are in sync
+            if not _should_index_file(abs_path, rel_str, self.cfg):
+                self.events_ignored += 1
+                return True
+
+            return False
+
         def on_created(self, event: FileSystemEvent):
             if event.is_directory:
                 return
-            self._process_file(Path(event.src_path))
+            if self._should_ignore_path(event.src_path):
+                return
+            try:
+                self._process_file(Path(event.src_path))
+            except Exception as e:
+                print(f"[rewindex] ERROR processing created event for {event.src_path}: {e}")
+                import traceback
+                traceback.print_exc()
 
         def on_modified(self, event: FileSystemEvent):
             if event.is_directory:
                 return
-            self._process_file(Path(event.src_path))
+            if self._should_ignore_path(event.src_path):
+                return
+            try:
+                self._process_file(Path(event.src_path))
+            except Exception as e:
+                print(f"[rewindex] ERROR processing modified event for {event.src_path}: {e}")
+                import traceback
+                traceback.print_exc()
 
         def on_deleted(self, event: FileSystemEvent):
             if event.is_directory:
                 return
-            self._process_file(Path(event.src_path))
+            if self._should_ignore_path(event.src_path):
+                return
+            try:
+                self.events_processed += 1
+                # Deletion events are typically handled by _mark_missing_as_deleted in full index scans
+                # Log deletion but don't process (file doesn't exist anymore)
+                if self.events_processed % 50 == 0:
+                    from datetime import datetime
+                    timestamp = datetime.now().strftime("%H:%M:%S")
+                    print(f"[rewindex] [{timestamp}] Deletion event: {event.src_path}")
+            except Exception as e:
+                print(f"[rewindex] ERROR processing deleted event for {event.src_path}: {e}")
+                import traceback
+                traceback.print_exc()
 
         def on_moved(self, event: FileSystemEvent):
             if event.is_directory:
                 return
-            # Process both old and new paths
-            self._process_file(Path(event.src_path))
-            if hasattr(event, 'dest_path'):
-                self._process_file(Path(event.dest_path))
+            # Check both src and dest paths
+            if self._should_ignore_path(event.src_path):
+                return
+            if hasattr(event, 'dest_path') and self._should_ignore_path(event.dest_path):
+                return
+            try:
+                # Process both old and new paths
+                self._process_file(Path(event.src_path))
+                if hasattr(event, 'dest_path'):
+                    self._process_file(Path(event.dest_path))
+            except Exception as e:
+                print(f"[rewindex] ERROR processing moved event: {e}")
+                import traceback
+                traceback.print_exc()
 
 
 def watch(
@@ -543,23 +644,66 @@ def watch(
         return poll_watch(project_root, cfg, 1.0, stop_event, on_update, on_event)
 
     print("[rewindex] File watcher started (event-driven via watchdog)")
+    print(f"[rewindex] Watching: {project_root} (recursive)")
 
     event_handler = ProjectFileHandler(project_root, cfg, on_update, on_event)
     observer = Observer()
     observer.schedule(event_handler, str(project_root), recursive=True)
     observer.start()
 
+    from datetime import datetime
+    last_heartbeat = datetime.now()
+    iteration = 0
+    last_event_count = 0
+
     try:
         while True:
+            iteration += 1
+
+            # Heartbeat every 60 seconds
+            if iteration % 60 == 0:
+                elapsed = (datetime.now() - last_heartbeat).total_seconds()
+                event_count = event_handler.events_processed
+                events_this_period = event_count - last_event_count
+                last_heartbeat = datetime.now()
+                last_event_count = event_count
+
+                pending_count = len(event_handler.pending_files)
+
+                print(f"[rewindex] 💓 Heartbeat (iteration {iteration}, {events_this_period} events/min)")
+
+                # Only warn if there are issues
+                if pending_count > 500:
+                    print(f"[rewindex]    ⚠️  {pending_count} files backlogged (watcher may be overwhelmed)")
+                    # Clear stale pending files older than 60 seconds
+                    now = time.time()
+                    stale = [p for p, t in event_handler.last_event_time.items() if now - t > 60]
+                    for p in stale:
+                        event_handler.pending_files.discard(p)
+                    if stale:
+                        print(f"[rewindex]    🧹 Cleared {len(stale)} stale pending files")
+
+                if not observer.is_alive():
+                    print(f"[rewindex]    ❌ Observer thread died!")
+
             if stop_event is not None and stop_event.is_set():
+                print("[rewindex] Watcher stop event received")
                 break
-            time.sleep(1)
+            time.sleep(1.0)
     except KeyboardInterrupt:
-        print("\n[rewindex] Watcher stopped.")
+        print("\n[rewindex] Watcher stopped (keyboard interrupt).")
+    except Exception as e:
+        print(f"[rewindex] FATAL: Watcher loop crashed: {e}")
+        import traceback
+        traceback.print_exc()
     finally:
+        print(f"[rewindex] Stopping watchdog observer... (processed {event_handler.events_processed} events)")
         observer.stop()
-        observer.join()
-        print("[rewindex] Watcher stopped.")
+        observer.join(timeout=5.0)
+        if observer.is_alive():
+            print("[rewindex] WARNING: Observer did not stop cleanly")
+        else:
+            print("[rewindex] Watchdog observer stopped cleanly")
 
 
 def _mark_missing_as_deleted(
