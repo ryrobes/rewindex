@@ -4390,6 +4390,19 @@
     const targetOffsetX = viewport.centerX - (targetScale * cx);
     const targetOffsetY = viewport.centerY - (targetScale * cy);
 
+    // Check if tile is already properly centered and zoomed - if so, skip animation
+    const POSITION_TOLERANCE = 5; // pixels
+    const SCALE_TOLERANCE = 0.02; // 2% difference
+    const isAlreadyCentered =
+      Math.abs(offsetX - targetOffsetX) < POSITION_TOLERANCE &&
+      Math.abs(offsetY - targetOffsetY) < POSITION_TOLERANCE &&
+      Math.abs(scale - targetScale) < SCALE_TOLERANCE;
+
+    if(isAlreadyCentered){
+      console.log('✓ [centerOnTile] Already centered, skipping animation');
+      return;
+    }
+
     // FUN CINEMATIC ANIMATION: If already zoomed in, zoom out first, then pan, then zoom in
     const ZOOM_THRESHOLD = 0.8; // Consider "zoomed in" if scale > 0.8
     if(scale > ZOOM_THRESHOLD && targetScale > ZOOM_THRESHOLD){
