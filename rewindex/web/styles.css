@@ -1133,6 +1133,19 @@ body {
   border-left-color: var(--accent);
 }
 
+/* Cross-panel highlight (when file is selected in another panel) */
+.result-file-header.cross-highlight {
+  background: rgba(255, 215, 0, 0.15);
+  border-left: 3px solid rgba(255, 215, 0, 0.6);
+  padding-left: 5px;
+  animation: cross-highlight-pulse 1s ease-in-out;
+}
+
+@keyframes cross-highlight-pulse {
+  0%, 100% { background: rgba(255, 215, 0, 0.15); }
+  50% { background: rgba(255, 215, 0, 0.25); }
+}
+
 .result-file {
   font-weight: 600;
   font-size: 13px;

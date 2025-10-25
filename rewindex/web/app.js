@@ -835,6 +835,8 @@
         fileHeader.classList.add('active');
         focusResult(fileGroup.resultSets[0]);
         file.scrollIntoView({block:'nearest'});
+        // Highlight this file in all filter panels
+        highlightFileInAllPanels(fileGroup.file_path, null);
       };
 
       // Add deleted badge
@@ -991,6 +993,54 @@
   // ============================================================================
   // MULTI-PANEL FILTER SYSTEM (New Implementation)
   // ============================================================================
+
+  // Highlight and scroll to a file in all panels (main + all filters)
+  function highlightFileInAllPanels(filePath, currentPanelId = null){
+    console.log(`🎯 [highlightFileInAllPanels] Highlighting: ${filePath} (skip panel: ${currentPanelId})`);
+
+    // 1. Highlight in main results
+    const mainResults = resultsEl.querySelectorAll('.result-group');
+    mainResults.forEach(grp => {
+      const grpPath = grp.getAttribute('data-file-path');
+      const fileHeader = grp.querySelector('.result-file-header');
+      if(grpPath === filePath && fileHeader){
+        // Clear other highlights in main results
+        resultsEl.querySelectorAll('.result-file-header.cross-highlight').forEach(el => {
+          el.classList.remove('cross-highlight');
+        });
+        // Add highlight
+        fileHeader.classList.add('cross-highlight');
+        // Scroll into view
+        fileHeader.scrollIntoView({block: 'nearest', behavior: 'smooth'});
+        console.log('  ✓ Highlighted in main results');
+      }
+    });
+
+    // 2. Highlight in all filter panels (except the one clicked)
+    filterPanels.forEach(panel => {
+      if(panel.id === currentPanelId) return; // Skip the panel that was clicked
+
+      const resultsContent = panel.element.querySelector('.filter-results-content');
+      if(!resultsContent) return;
+
+      const resultGroups = resultsContent.querySelectorAll('.result-group');
+      resultGroups.forEach(grp => {
+        const grpPath = grp.getAttribute('data-file-path');
+        const fileHeader = grp.querySelector('.result-file-header');
+        if(grpPath === filePath && fileHeader){
+          // Clear other highlights in this panel
+          resultsContent.querySelectorAll('.result-file-header.cross-highlight').forEach(el => {
+            el.classList.remove('cross-highlight');
+          });
+          // Add highlight
+          fileHeader.classList.add('cross-highlight');
+          // Scroll into view within the panel
+          fileHeader.scrollIntoView({block: 'nearest', behavior: 'smooth'});
+          console.log(`  ✓ Highlighted in filter panel ${panel.id}`);
+        }
+      });
+    });
+  }
 
   // Create and add a new filter panel
   function addFilterPanel(){
@@ -1295,6 +1345,8 @@
         fileHeader.classList.add('active');
         focusResult(r);
         file.scrollIntoView({block:'nearest'});
+        // Highlight this file in all other panels (main results + earlier filters)
+        highlightFileInAllPanels(r.file_path, panel.id);
       };
 
       // Add deleted badge
@@ -1333,9 +1385,14 @@
           item.classList.add('active');
           focusLine(r.file_path, m.line, panel.query);
           item.scrollIntoView({block:'nearest'});
+          // Highlight this file in all other panels
+          highlightFileInAllPanels(r.file_path, panel.id);
         };
         ol.appendChild(item);
       });
+
+      // Add data attribute for cross-panel highlighting
+      grp.setAttribute('data-file-path', r.file_path);
 
       grp.appendChild(fileHeader);
       grp.appendChild(ol);
@@ -4343,22 +4400,108 @@
     pathData += ` L ${points[0].x} ${bottomY}`; // Across to bottom left
     pathData += ` Z`; // Close path
 
-    // Create area fill (semi-transparent)
+    // Split paths if we're time-traveling (dim the "future" portion)
+    let areaPathBefore = pathData;
+    let linePathBefore = linePathData;
+    let areaPathAfter = null;
+    let linePathAfter = null;
+    let splitIndex = -1;
+
+    if(currentAsOfMs !== null && sparkKeys.length > 0){
+      // Find the split point (closest timestamp to currentAsOfMs)
+      let minDiff = Math.abs(sparkKeys[0] - currentAsOfMs);
+      splitIndex = 0;
+      for(let i = 1; i < sparkKeys.length; i++){
+        const diff = Math.abs(sparkKeys[i] - currentAsOfMs);
+        if(diff < minDiff){
+          minDiff = diff;
+          splitIndex = i;
+        }
+      }
+
+      // Split the paths at this index
+      if(splitIndex < points.length - 1){
+        // Build "before" path (from start to splitIndex)
+        let beforeLinePath = `M ${points[0].x} ${points[0].y}`;
+        for(let i = 0; i < splitIndex; i++){
+          const p0 = points[Math.max(0, i - 1)];
+          const p1 = points[i];
+          const p2 = points[i + 1];
+          const p3 = points[Math.min(points.length - 1, i + 2)];
+          const tension = 0.3;
+          const cp1x = p1.x + (p2.x - p0.x) * tension;
+          const cp1y = p1.y + (p2.y - p0.y) * tension;
+          const cp2x = p2.x - (p3.x - p1.x) * tension;
+          const cp2y = p2.y - (p3.y - p1.y) * tension;
+          beforeLinePath += ` C ${cp1x} ${cp1y}, ${cp2x} ${cp2y}, ${p2.x} ${p2.y}`;
+        }
+        linePathBefore = beforeLinePath;
+        let beforeAreaPath = beforeLinePath;
+        beforeAreaPath += ` L ${points[splitIndex].x} ${bottomY}`;
+        beforeAreaPath += ` L ${points[0].x} ${bottomY}`;
+        beforeAreaPath += ` Z`;
+        areaPathBefore = beforeAreaPath;
+
+        // Build "after" path (from splitIndex to end)
+        let afterLinePath = `M ${points[splitIndex].x} ${points[splitIndex].y}`;
+        for(let i = splitIndex; i < points.length - 1; i++){
+          const p0 = points[Math.max(0, i - 1)];
+          const p1 = points[i];
+          const p2 = points[i + 1];
+          const p3 = points[Math.min(points.length - 1, i + 2)];
+          const tension = 0.3;
+          const cp1x = p1.x + (p2.x - p0.x) * tension;
+          const cp1y = p1.y + (p2.y - p0.y) * tension;
+          const cp2x = p2.x - (p3.x - p1.x) * tension;
+          const cp2y = p2.y - (p3.y - p1.y) * tension;
+          afterLinePath += ` C ${cp1x} ${cp1y}, ${cp2x} ${cp2y}, ${p2.x} ${p2.y}`;
+        }
+        linePathAfter = afterLinePath;
+        let afterAreaPath = afterLinePath;
+        afterAreaPath += ` L ${points[points.length - 1].x} ${bottomY}`;
+        afterAreaPath += ` L ${points[splitIndex].x} ${bottomY}`;
+        afterAreaPath += ` Z`;
+        areaPathAfter = afterAreaPath;
+      }
+    }
+
+    // Create area fill "before" (semi-transparent, normal)
     const areaPath = document.createElementNS(svgNS, 'path');
-    areaPath.setAttribute('d', pathData);
+    areaPath.setAttribute('d', areaPathBefore);
     areaPath.setAttribute('fill', accentColor || '#39bae6');
-    areaPath.setAttribute('fill-opacity', '0.2'); // More transparent fill
+    areaPath.setAttribute('fill-opacity', '0.2');
     areaPath.setAttribute('stroke', 'none');
     svg.appendChild(areaPath);
 
-    // Create stroke line (full color, no fill)
+    // Create stroke line "before" (full color, no fill)
     const linePath = document.createElementNS(svgNS, 'path');
-    linePath.setAttribute('d', linePathData);
+    linePath.setAttribute('d', linePathBefore);
     linePath.setAttribute('fill', 'none');
     linePath.setAttribute('stroke', accentColor || '#39bae6');
     linePath.setAttribute('stroke-width', '1.5');
-    linePath.setAttribute('stroke-opacity', '1'); // Full opacity stroke
+    linePath.setAttribute('stroke-opacity', '1');
     svg.appendChild(linePath);
+
+    // Create dimmed "after" portion (future from selected timestamp)
+    if(areaPathAfter && linePathAfter){
+      const areaPathDimmed = document.createElementNS(svgNS, 'path');
+      areaPathDimmed.setAttribute('d', areaPathAfter);
+      areaPathDimmed.setAttribute('fill', accentColor || '#39bae6');
+      areaPathDimmed.setAttribute('fill-opacity', '0.05'); // Much dimmer
+      areaPathDimmed.setAttribute('stroke', 'none');
+      areaPathDimmed.setAttribute('class', 'timeline-future-dimmed');
+      svg.appendChild(areaPathDimmed);
+
+      const linePathDimmed = document.createElementNS(svgNS, 'path');
+      linePathDimmed.setAttribute('d', linePathAfter);
+      linePathDimmed.setAttribute('fill', 'none');
+      linePathDimmed.setAttribute('stroke', accentColor || '#39bae6');
+      linePathDimmed.setAttribute('stroke-width', '1.5');
+      linePathDimmed.setAttribute('stroke-opacity', '0.15'); // Much dimmer
+      linePathDimmed.setAttribute('stroke-dasharray', '4,4'); // Dashed to show it's "future"
+      linePathDimmed.setAttribute('class', 'timeline-future-dimmed');
+      svg.appendChild(linePathDimmed);
+    }
 
     // Restore existing ripple animations (allows multiple ripples to stack)
     if (existingDefs) svg.appendChild(existingDefs);
