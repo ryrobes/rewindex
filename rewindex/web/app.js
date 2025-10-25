@@ -71,6 +71,7 @@
   let dynTextMode = true; // Default ON for dynamic text sizing
   let resultsOnlyMode = !showAllParam; // Default TRUE (results only), unless URL param says otherwise
   let lastSearchResults = []; // Store last search results for results-only mode
+  let timelineFilePaths = []; // Store file paths for timeline (base query, no time filter)
   let currentLanguageFilter = null; // Currently active language filter (e.g., "python", "javascript")
   let languageColors = {}; // Map of language -> color
   let languageList = []; // Ordered list of discovered languages
@@ -494,11 +495,17 @@
 
       // Clear search results
       lastSearchResults = [];
+      timelineFilePaths = []; // Also clear timeline file paths
 
       // Clear all filter panels when primary is cleared
       while(filterPanels.length > 0){
         removeFilterPanel(filterPanels[0].id);
       }
+
+      // Update timeline back to global view (no search active)
+      refreshTimeline().catch(e => {
+        console.warn('[doSearch] Timeline refresh failed:', e);
+      });
 
       // In results-only mode, clear canvas when search is empty
       if(resultsOnlyMode){
@@ -573,6 +580,16 @@
     // Store search results for results-only mode
     lastSearchResults = results;
 
+    // Store timeline file paths (base query without time filter)
+    // IMPORTANT: Only update timeline paths when NOT time-traveling
+    // This ensures timeline shows full history of base query, not time-filtered results
+    if(!currentAsOfMs){
+      timelineFilePaths = results.map(r => r.file_path);
+      console.log(`🕐 [doSearch] Updated timeline file paths: ${timelineFilePaths.length} files (base query)`);
+    } else {
+      console.log(`🕐 [doSearch] Keeping timeline file paths: ${timelineFilePaths.length} files (time-traveling, not updating)`);
+    }
+
     // RESULTS-ONLY MODE: Rebuild canvas with only search results
     if(resultsOnlyMode){
       await refreshAllTiles(currentAsOfMs);
@@ -615,6 +632,12 @@
         console.error('[preload] Error:', e);
       });
     }
+
+    // Update timeline to show search-scoped or global timeline
+    // (Will show only versions of matched files when search is active)
+    refreshTimeline().catch(e => {
+      console.warn('[doSearch] Timeline refresh failed:', e);
+    });
   }
 
   function renderResults(results, total, skipDimming = false){
@@ -990,23 +1013,14 @@
     panel.className = 'filter-panel animating-in';
     panel.setAttribute('data-panel-id', panelId);
 
-    // Header
+    // Compact header with input + toggles + close all in one row
     const header = document.createElement('div');
     header.className = 'filter-panel-header';
     header.innerHTML = `
-      <h3>Filter ${panelNumber}</h3>
-      <button class="filter-panel-close" title="Remove filter">×</button>
-    `;
-
-    // Search input
-    const searchDiv = document.createElement('div');
-    searchDiv.className = 'filter-panel-search';
-    searchDiv.innerHTML = `
       <input type="text" class="filter-panel-input" placeholder="Refine further..." />
-      <div class="filter-panel-options">
-        <button class="filter-option-btn" data-option="fuzzy" title="Fuzzy search">~</button>
-        <button class="filter-option-btn" data-option="partial" title="Partial match">*</button>
-      </div>
+      <button class="filter-option-btn" data-option="fuzzy" title="Fuzzy search">~</button>
+      <button class="filter-option-btn" data-option="partial" title="Partial match">*</button>
+      <button class="filter-panel-close" title="Remove filter">×</button>
     `;
 
     // Results container with header, spinner, and content
@@ -1027,7 +1041,6 @@
 
     // Assemble panel
     panel.appendChild(header);
-    panel.appendChild(searchDiv);
     panel.appendChild(resultsDiv);
 
     // Add panel state
@@ -2790,6 +2803,39 @@
         return { positions: new Map(), width: 2*pad, height: pad + header + pad };
       }
 
+      // Check if all children are uniform size (same width and height)
+      const allUniform = children.every(ch => ch.w === children[0].w && ch.h === children[0].h);
+
+      if(allUniform){
+        // For uniform tiles, use optimal grid layout (creates square-ish grids)
+        const n = children.length;
+        const itemW = children[0].w;
+        const itemH = children[0].h;
+
+        // Calculate optimal columns to create a square-ish grid
+        // For n items, we want cols ≈ sqrt(n) to minimize aspect ratio deviation
+        const cols = Math.ceil(Math.sqrt(n));
+        const rows = Math.ceil(n / cols);
+
+        console.log(`📐 [grid layout] ${n} uniform tiles → ${cols}×${rows} grid`);
+
+        const positions = new Map();
+
+        children.forEach((child, i) => {
+          const col = i % cols;
+          const row = Math.floor(i / cols);
+          const x = pad + col * (itemW + gap);
+          const y = pad + header + row * (itemH + gap);
+          positions.set(child, { x, y });
+        });
+
+        const width = pad + cols * (itemW + gap) - gap + pad;
+        const height = pad + header + rows * (itemH + gap) - gap + pad;
+
+        return { positions, width, height };
+      }
+
+      // For non-uniform children, use skyline packing algorithm
       // Calculate total area to determine optimal width for balanced aspect ratio
       let totalArea = 0;
       for(const child of children){
@@ -2864,6 +2910,14 @@
 
       if(node !== root && children.length === 0){
         children.push({ type:'spacer', w: tileW, h: tileH });
+      }
+
+      // Special case: if we ONLY have files (no folders), force uniform grid layout
+      // This ensures files always use the optimal square grid
+      const hasOnlyFiles = children.every(ch => ch.type === 'file' || ch.type === 'spacer');
+      if(hasOnlyFiles && children.length > 0){
+        // Override dimensions to ensure uniform check passes
+        children.forEach(ch => { ch.w = tileW; ch.h = tileH; });
       }
 
       // Use Skyline bin packing for optimal space usage
@@ -2971,7 +3025,12 @@
     const gap = 40;
     const startX = 40;
     const startY = 40;
-    const tilesPerRow = 15; // 15 tiles per row for wide pannable canvas
+
+    // Calculate optimal columns for square-ish grid
+    const n = paths.length;
+    const tilesPerRow = Math.ceil(Math.sqrt(n));
+
+    console.log(`📐 [layoutSimpleGrid] ${n} tiles → ${tilesPerRow} cols per row (square grid)`);
 
     let x = startX;
     let y = startY;
@@ -3932,7 +3991,12 @@
           //showToast(`${action === 'added' ? 'Indexed' : 'Updated'}: ${path}`);
           refreshTileContent(path);
           flashTile(path, 'update');
-          refreshTimeline(); // Update timeline when files are indexed
+
+          // Update timeline and trigger ripple after redraw completes
+          refreshTimeline().then(() => {
+            // Wait a tiny bit for DOM to settle after SVG redraw
+            setTimeout(() => triggerTimelineRipple(), 50);
+          }).catch(() => {}); // Ignore errors
 
           // Update language bar when files change
           updateLanguageBar();
@@ -3956,17 +4020,66 @@
   async function refreshTimeline(){
     if(!sparklineEl) return;
     try{
-      const s = await fetchJSON('/timeline/stats');
+      // Determine if we should show search-scoped timeline or global timeline
+      // IMPORTANT: Use timelineFilePaths (base query) not lastSearchResults (time-filtered)
+      const hasQuery = qEl && qEl.value && qEl.value.trim();
+      const hasTimelineFiles = timelineFilePaths.length > 0;
+      const isTimeTraveling = currentAsOfMs != null;
+
+      // Show search-scoped timeline whenever we have timeline file paths
+      // Timeline ALWAYS shows all time for these files (never filtered by currentAsOfMs)
+      const hasActiveSearch = hasQuery && hasTimelineFiles;
+
+      console.log(`🕐 [refreshTimeline] DEBUG:`, {
+        hasQuery: !!hasQuery,
+        queryValue: qEl?.value,
+        hasTimelineFiles,
+        timelineFileCount: timelineFilePaths.length,
+        currentResultCount: lastSearchResults.length,
+        isTimeTraveling,
+        currentAsOfMs,
+        hasActiveSearch
+      });
+
+      let url = '/timeline/stats';
+      if(hasActiveSearch){
+        // Search-scoped timeline: show only versions of files from BASE query (no time filter)
+        // This ensures timeline shows full history even when time-traveling
+        const pathsParam = encodeURIComponent(JSON.stringify(timelineFilePaths));
+        url = `/timeline/stats?paths=${pathsParam}`;
+        if(isTimeTraveling){
+          console.log(`🕐 [refreshTimeline] Search-scoped (time-traveling): ${timelineFilePaths.length} files from base query, showing full history`);
+        } else {
+          console.log(`🕐 [refreshTimeline] Search-scoped: ${timelineFilePaths.length} files`);
+        }
+      } else {
+        console.log(`🕐 [refreshTimeline] Global timeline (no active search)`);
+      }
+
+      console.log(`🕐 [refreshTimeline] Fetching: ${url.substring(0, 100)}${url.length > 100 ? '...' : ''}`);
+      const s = await fetchJSON(url);
+      console.log(`🕐 [refreshTimeline] Response:`, s);
+
       if(s && s.min && s.max){
         timelineMin = s.min; timelineMax = s.max;
         drawSparkline(s.series||[]);
+
+        // Log timeline stats
+        if(s.filtered){
+          console.log(`🕐 [refreshTimeline] ✅ Filtered to ${s.file_count} files, ${s.bucket_count} buckets (${s.interval} interval)`);
+        } else {
+          console.log(`🕐 [refreshTimeline] ✅ Global: ${s.bucket_count} buckets (${s.interval} interval)`);
+        }
+
         // Update tick position if we're in time-travel mode
         if(currentAsOfMs != null) updateSparkTick();
       } else {
+        console.log(`🕐 [refreshTimeline] Empty response, drawing empty sparkline`);
         drawSparkline([]);
       }
     }catch(e){
-      // Ignore errors silently
+      // Log errors for debugging
+      console.error('[refreshTimeline] Error:', e);
     }
   }
 
@@ -4032,7 +4145,116 @@
     }
   })();
 
+  function triggerTimelineRipple(){
+    // Create a ripple wave that travels from right to left across the timeline
+    if(!sparklineEl) return;
+
+    const svg = sparklineEl.querySelector('svg');
+    if(!svg) return;
+
+    // Limit number of concurrent ripples to prevent performance issues
+    const existingRipples = svg.querySelectorAll('.timeline-ripple');
+    if(existingRipples.length > 5){
+      // Remove oldest ripple if too many
+      existingRipples[0].remove();
+    }
+
+    const svgNS = 'http://www.w3.org/2000/svg';
+    const viewBox = svg.getAttribute('viewBox');
+    if(!viewBox) return;
+
+    const [,,W, H] = viewBox.split(' ').map(Number);
+    const accentColor = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() || '#39bae6';
+
+    // Create gradient definition for the ripple (reuse defs if exists)
+    let defs = svg.querySelector('defs');
+    if(!defs){
+      defs = document.createElementNS(svgNS, 'defs');
+      svg.insertBefore(defs, svg.firstChild);
+    }
+    const gradientId = `ripple-gradient-${Date.now()}`;
+    const gradient = document.createElementNS(svgNS, 'linearGradient');
+    gradient.setAttribute('id', gradientId);
+    gradient.setAttribute('x1', '0%');
+    gradient.setAttribute('x2', '100%');
+
+    // Gradient: transparent -> bright -> transparent
+    const stop1 = document.createElementNS(svgNS, 'stop');
+    stop1.setAttribute('offset', '0%');
+    stop1.setAttribute('stop-color', accentColor);
+    stop1.setAttribute('stop-opacity', '0');
+
+    const stop2 = document.createElementNS(svgNS, 'stop');
+    stop2.setAttribute('offset', '50%');
+    stop2.setAttribute('stop-color', accentColor);
+    stop2.setAttribute('stop-opacity', '0.8');
+
+    const stop3 = document.createElementNS(svgNS, 'stop');
+    stop3.setAttribute('offset', '100%');
+    stop3.setAttribute('stop-color', accentColor);
+    stop3.setAttribute('stop-opacity', '0');
+
+    gradient.appendChild(stop1);
+    gradient.appendChild(stop2);
+    gradient.appendChild(stop3);
+    defs.appendChild(gradient);
+
+    // Create ripple rectangle
+    const rippleWidth = W * 0.2; // 20% of timeline width
+    const ripple = document.createElementNS(svgNS, 'rect');
+    ripple.setAttribute('class', 'timeline-ripple');
+    ripple.setAttribute('x', W); // Start at right edge
+    ripple.setAttribute('y', 0);
+    ripple.setAttribute('width', rippleWidth);
+    ripple.setAttribute('height', H);
+    ripple.setAttribute('fill', `url(#${gradientId})`);
+    ripple.setAttribute('opacity', '0');
+
+    // Insert ripple (before ticks so ticks render on top)
+    svg.appendChild(ripple);
+
+    // Use SVG native animation for smooth movement
+    const duration = 1.8; // 1.8 seconds
+
+    // Animate X position (movement)
+    const animateX = document.createElementNS(svgNS, 'animate');
+    animateX.setAttribute('attributeName', 'x');
+    animateX.setAttribute('from', W);
+    animateX.setAttribute('to', -rippleWidth);
+    animateX.setAttribute('dur', `${duration}s`);
+    animateX.setAttribute('fill', 'freeze');
+    ripple.appendChild(animateX);
+
+    // Animate opacity (fade in/out)
+    const animateOpacity = document.createElementNS(svgNS, 'animate');
+    animateOpacity.setAttribute('attributeName', 'opacity');
+    animateOpacity.setAttribute('values', '0;0.8;0.6;0');
+    animateOpacity.setAttribute('keyTimes', '0;0.05;0.9;1');
+    animateOpacity.setAttribute('dur', `${duration}s`);
+    animateOpacity.setAttribute('fill', 'freeze');
+    ripple.appendChild(animateOpacity);
+
+    // Start animation
+    animateX.beginElement();
+    animateOpacity.beginElement();
+
+    // Remove ripple and gradient after animation (don't remove defs, just the gradient)
+    setTimeout(() => {
+      ripple.remove();
+      gradient.remove();
+      // Clean up empty defs element if no gradients remain
+      if (defs && defs.children.length === 0) {
+        defs.remove();
+      }
+    }, duration * 1000);
+  }
+
   function drawSparkline(series){
+    // Preserve existing ripple animations before clearing
+    const existingSvg = sparklineEl.querySelector('svg');
+    const existingRipples = existingSvg ? Array.from(existingSvg.querySelectorAll('.timeline-ripple')) : [];
+    const existingDefs = existingSvg ? existingSvg.querySelector('defs') : null;
+
     sparklineEl.innerHTML = '';
     if(!series || series.length===0){
       const svgNS = 'http://www.w3.org/2000/svg';
@@ -4042,6 +4264,11 @@
       svg.setAttribute('preserveAspectRatio', 'none');
       sparklineEl.appendChild(svg);
       sparkKeys = [];
+
+      // Restore ripples even for empty series
+      if (existingDefs) svg.appendChild(existingDefs);
+      existingRipples.forEach(r => svg.appendChild(r));
+
       if (sparkTick) sparklineEl.appendChild(sparkTick);
       if (sparkHover) sparklineEl.appendChild(sparkHover);
       updateSparkTick();
@@ -4107,19 +4334,36 @@
       pathData += ` C ${cp1x} ${cp1y}, ${cp2x} ${cp2y}, ${p2.x} ${p2.y}`;
     }
 
+    // Save the line path for stroke (before closing)
+    const linePathData = pathData;
+
     // Close the area: line down to bottom right, across to bottom left, close
     const bottomY = H - paddingBottom;
     pathData += ` L ${points[points.length - 1].x} ${bottomY}`; // Down to bottom right
     pathData += ` L ${points[0].x} ${bottomY}`; // Across to bottom left
     pathData += ` Z`; // Close path
 
-    // Create area path element
-    const path = document.createElementNS(svgNS, 'path');
-    path.setAttribute('d', pathData);
-    path.setAttribute('fill', accentColor || '#39bae6');
-    path.setAttribute('fill-opacity', '0.45');
-    path.setAttribute('stroke', 'none');
-    svg.appendChild(path);
+    // Create area fill (semi-transparent)
+    const areaPath = document.createElementNS(svgNS, 'path');
+    areaPath.setAttribute('d', pathData);
+    areaPath.setAttribute('fill', accentColor || '#39bae6');
+    areaPath.setAttribute('fill-opacity', '0.2'); // More transparent fill
+    areaPath.setAttribute('stroke', 'none');
+    svg.appendChild(areaPath);
+
+    // Create stroke line (full color, no fill)
+    const linePath = document.createElementNS(svgNS, 'path');
+    linePath.setAttribute('d', linePathData);
+    linePath.setAttribute('fill', 'none');
+    linePath.setAttribute('stroke', accentColor || '#39bae6');
+    linePath.setAttribute('stroke-width', '1.5');
+    linePath.setAttribute('stroke-opacity', '1'); // Full opacity stroke
+    svg.appendChild(linePath);
+
+    // Restore existing ripple animations (allows multiple ripples to stack)
+    if (existingDefs) svg.appendChild(existingDefs);
+    existingRipples.forEach(r => svg.appendChild(r));
+
     // Re-attach ticks on top
     if (sparkTick) sparklineEl.appendChild(sparkTick);
     if (sparkHover) sparklineEl.appendChild(sparkHover);
@@ -5091,13 +5335,16 @@
     }
 
     // Apply wallpaper background to workspace with dimming overlay
+    // Add delay to allow file system to finish copying/moving the background file
     if(backgroundUrl){
-      console.log(' [theme] Setting workspace wallpaper:', backgroundUrl);
-      workspace.style.backgroundImage = `linear-gradient(rgba(0, 0, 0, 0.7), rgba(0, 0, 0, 0.7)), url('${backgroundUrl}')`;
-      workspace.style.backgroundSize = 'cover';
-      workspace.style.backgroundPosition = 'center';
-      workspace.style.backgroundRepeat = 'no-repeat';
-      workspace.style.backgroundAttachment = 'fixed';
+      console.log(' [theme] Setting workspace wallpaper (with 500ms delay):', backgroundUrl);
+      setTimeout(() => {
+        workspace.style.backgroundImage = `linear-gradient(rgba(0, 0, 0, 0.7), rgba(0, 0, 0, 0.7)), url('${backgroundUrl}')`;
+        workspace.style.backgroundSize = 'cover';
+        workspace.style.backgroundPosition = 'center';
+        workspace.style.backgroundRepeat = 'no-repeat';
+        workspace.style.backgroundAttachment = 'fixed';
+      }, 500);
     }
 
     // Regenerate language colors with new theme gradient

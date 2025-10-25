@@ -118,16 +118,13 @@ body {
 /* Individual Filter Panel (dynamically created) */
 .filter-panel {
   position: relative;
-  width: 300px;
+  width: 360px;
   height: 100%;
   margin-top: 105px;
   font-family: var(--font-sans), Inter, system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Noto Sans, Helvetica Neue, Arial, sans-serif;
-  /* background: #13172119; */
-  /* background: var(--bgt); */
-  /* background: var(--bgt); */
   backdrop-filter: blur(8px)brightness(80%);
   border-right: 1px solid var(--border);
-  padding: 16px;
+  padding: 12px;
   overflow-y: auto;
   overflow-x: visible; /* Allow nub to stick out */
   box-sizing: border-box;
@@ -142,133 +139,115 @@ body {
   transform: translateX(-20px);
 }
 
+/* Compact header: input + toggles + close all in one row */
 .filter-panel-header {
   display: flex;
-  justify-content: space-between;
+  gap: 4px;
   align-items: center;
-  margin-bottom: 12px;
-  padding-bottom: 12px;
-  /* border-bottom: 1px solid var(--border); */
-}
-
-.filter-panel-header h3 {
-  margin: 0;
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--accent);
-  text-transform: uppercase;
-  letter-spacing: 1px;
+  margin-bottom: 4px;
+  flex-shrink: 0;
 }
 
 .filter-panel-close {
   background: none;
   border: none;
   color: var(--muted);
-  font-size: 20px;
+  font-size: 18px;
   line-height: 1;
   cursor: pointer;
   padding: 0;
-  width: 20px;
-  height: 20px;
+  width: 28px;
+  height: 28px;
   display: flex;
   align-items: center;
   justify-content: center;
   transition: all 0.2s ease;
+  flex-shrink: 0;
+  border-radius: 3px;
 }
 
 .filter-panel-close:hover {
   color: #ff6b6b;
-  transform: scale(1.2);
-}
-
-.filter-panel-search {
-  margin-bottom: 12px;
+  background: rgba(255, 107, 107, 0.1);
 }
 
 .filter-panel-input {
-  width: 100%;
-  padding: 8px 10px;
-  font-size: 13px;
-  /* font-family: var(--font-mono), 'Fira Code', monospace; */
+  flex: 1;
+  padding: 6px 8px;
+  font-size: 14px;
   color: var(--text);
   background: rgba(0, 0, 0, 0.3);
-  /* border: 1px solid var(--border); */
   border-radius: 4px;
   outline: none;
-    
   border: none;
   box-sizing: border-box;
   transition: all 0.2s ease;
+  min-width: 0; /* Allow flex shrink */
 }
 
 .filter-panel-input:focus {
-  border-color: var(--accent);
   background: rgba(0, 0, 0, 0.4);
+  box-shadow: 0 0 0 1px var(--accent);
 }
 
 .filter-panel-input::placeholder {
   color: var(--muted);
-  font-size: 12px;
-}
-
-.filter-panel-options {
-  display: flex;
-  gap: 4px;
-  
-  margin-top: 6px;
+  font-size: 11px;
 }
 
 .filter-option-btn {
-  padding: 4px 10px;
-  
+  padding: 6px 10px;
   font-size: 12px;
   font-family: var(--font-mono), 'Fira Code', monospace;
-  color: var(--accent-subtle);
+  color: var(--accent);
   background: rgba(0, 0, 0, 0.3);
   outline: none;
   border: none;
-  /* border: 1px solid var(--border); */
   border-radius: 3px;
   cursor: pointer;
   transition: all 0.2s ease;
+  flex-shrink: 0;
+  min-width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .filter-option-btn:hover {
   color: var(--text);
   background: rgba(0, 0, 0, 0.4);
-  border-color: var(--accent);
 }
 
 .filter-option-btn.active {
   color: var(--accent);
   background: var(--accent-hover);
-  border-color: var(--accent);
 }
 
 .filter-panel-results {
   flex: 1;
   overflow: hidden;
-  margin-top: 8px;
+  margin-top: 0;
   font-size: 12px;
   display: flex;
   flex-direction: column;
 }
 
 .filter-results-header {
-  /* padding: 8px 10px; */
-  /* background: var(--bg); */
-  /* border-bottom: 1px solid var(--border); */
   flex-shrink: 0;
-  /* min-height: 30px; */
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
+  margin-top: 2px;
+  margin-bottom: 4px;
 }
 
 .filter-results-content {
-  flex: 1;
+  /* flex: 1; */
+  width: 100%;
   overflow-y: auto;
+  margin-top: 2px;
   overflow-x: hidden;
 }
 
@@ -533,6 +512,28 @@ body {
 .sparkline-full .tick.hover {
   background: var(--text);
   opacity: 0.6;
+}
+
+/* Timeline ripple effect for file updates */
+.timeline-ripple {
+  pointer-events: none;
+}
+
+@keyframes timelineRipple {
+  0% {
+    transform: translateX(0);
+    opacity: 0;
+  }
+  5% {
+    opacity: 0.8;
+  }
+  95% {
+    opacity: 0.6;
+  }
+  100% {
+    transform: translateX(-100%);
+    opacity: 0;
+  }
 }
 
 .go-live-btn {

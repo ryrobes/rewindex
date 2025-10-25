@@ -244,24 +244,60 @@ def poll_watch(
     On each tick it performs an incremental index over candidate files.
     This is naive but dependency-free.
     """
+    from datetime import datetime
+
     print("[rewindex] Polling file watcher started (Ctrl+C to stop)...")
+    iteration = 0
+    consecutive_errors = 0
+    last_update_time = datetime.now()
+
     try:
         while True:
+            iteration += 1
+
+            # Heartbeat every 60 iterations (~1 minute if interval=1s)
+            if iteration % 60 == 0:
+                elapsed = (datetime.now() - last_update_time).total_seconds()
+                print(f"[rewindex] 💓 Watcher heartbeat (iteration {iteration}, {elapsed:.1f}s since last update)")
+
             if stop_event is not None and stop_event.is_set():
+                print("[rewindex] Watcher stop event received")
                 break
-            res = index_project(project_root, cfg, on_event=on_event)
-            if any(res.values()):
-                print(f"[rewindex] index update: {res}")
-                if on_update is not None:
-                    try:
-                        on_update(res)
-                    except Exception:
-                        pass
+
+            try:
+                res = index_project(project_root, cfg, on_event=on_event)
+                consecutive_errors = 0  # Reset error counter on success
+
+                if any(res.values()):
+                    last_update_time = datetime.now()
+                    timestamp = last_update_time.strftime("%H:%M:%S")
+                    print(f"[rewindex] [{timestamp}] index update: {res}")
+                    if on_update is not None:
+                        try:
+                            on_update(res)
+                        except Exception as e:
+                            print(f"[rewindex] WARNING: on_update callback failed: {e}")
+            except Exception as e:
+                consecutive_errors += 1
+                print(f"[rewindex] ERROR in watcher loop (error #{consecutive_errors}): {e}")
+                import traceback
+                traceback.print_exc()
+
+                # If we get too many consecutive errors, something is seriously wrong
+                if consecutive_errors >= 5:
+                    print("[rewindex] FATAL: Too many consecutive errors, stopping watcher")
+                    break
+
             time.sleep(max(interval_s, cfg.indexing.watch.debounce_ms / 1000.0))
+
     except KeyboardInterrupt:
-        print("\n[rewindex] Watcher stopped.")
+        print("\n[rewindex] Watcher stopped by keyboard interrupt.")
+    except Exception as e:
+        print(f"[rewindex] FATAL: Watcher loop crashed: {e}")
+        import traceback
+        traceback.print_exc()
     finally:
-        print("[rewindex] Watcher loop exiting.")
+        print(f"[rewindex] Watcher loop exiting (ran {iteration} iterations).")
 
 
 def index_single_file(

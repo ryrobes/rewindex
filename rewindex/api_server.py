@@ -96,6 +96,8 @@ class RewindexHandler(BaseHTTPRequestHandler):
     server_version = "rewindex-http/0.1"
     watcher_thread: threading.Thread | None = None
     watcher_stop: threading.Event | None = None
+    watcher_last_update: float = 0.0  # Timestamp of last successful watcher update
+    watcher_iteration_count: int = 0  # Total watcher iterations
     beads_root: Path | None = None  # Optional beads working directory
     theme_watcher: OmarchyThemeWatcher | None = None  # Omarchy theme integration
     theme_poll_thread: threading.Thread | None = None
@@ -111,6 +113,16 @@ class RewindexHandler(BaseHTTPRequestHandler):
             try:
                 es = ESClient(cfg.elasticsearch.host)
                 idx = ensure_indices(es, cfg.resolved_index_prefix())
+                watcher_alive = RewindexHandler.watcher_thread and RewindexHandler.watcher_thread.is_alive()
+                watcher_status = "running" if watcher_alive else "stopped"
+
+                # Check if watcher is stalled (alive but no updates for > 5 minutes)
+                import time as time_mod
+                if watcher_alive and RewindexHandler.watcher_last_update > 0:
+                    elapsed = time_mod.time() - RewindexHandler.watcher_last_update
+                    if elapsed > 300:  # 5 minutes
+                        watcher_status = f"stalled ({int(elapsed)}s since last update)"
+
                 out = {
                     "host": cfg.elasticsearch.host,
                     "project_root": str(root),
@@ -121,7 +133,9 @@ class RewindexHandler(BaseHTTPRequestHandler):
                         "files": es.count(idx["files_index"]) if es.index_exists(idx["files_index"]) else 0,
                         "versions": es.count(idx["versions_index"]) if es.index_exists(idx["versions_index"]) else 0,
                     },
-                    "watcher": "running" if RewindexHandler.watcher_thread and RewindexHandler.watcher_thread.is_alive() else "stopped",
+                    "watcher": watcher_status,
+                    "watcher_iterations": RewindexHandler.watcher_iteration_count,
+                    "watcher_last_update": RewindexHandler.watcher_last_update,
                 }
                 _json_response(self, 200, out)
             except (URLError, HTTPError):
@@ -274,21 +288,66 @@ class RewindexHandler(BaseHTTPRequestHandler):
             try:
                 es = ESClient(cfg.elasticsearch.host)
                 idx = ensure_indices(es, cfg.resolved_index_prefix())
+
+                # Check for file path filtering (search-scoped timeline)
+                paths_param = qs.get("paths", [None])[0]
+                file_paths = []
+                if paths_param:
+                    try:
+                        file_paths = json.loads(paths_param)
+                    except json.JSONDecodeError:
+                        pass
+
+                # Build query filter
+                query_filter = {"match_all": {}}
+                if file_paths:
+                    # Filter to only versions of files in search results
+                    query_filter = {"terms": {"file_path": file_paths}}
+                    logger.info(f"[timeline/stats] Filtering to {len(file_paths)} file paths")
+
+                # Use fixed 5-minute buckets instead of auto bucketing
+                # Hard limit: 500 buckets max (41.7 hours at 5-min intervals)
                 body = {
                     "size": 0,
+                    "query": query_filter,
                     "aggs": {
                         "min_ts": {"min": {"field": "created_at"}},
                         "max_ts": {"max": {"field": "created_at"}},
-                        "hist": {"auto_date_histogram": {"field": "created_at", "buckets": 60}},
+                        "hist": {
+                            "date_histogram": {
+                                "field": "created_at",
+                                "fixed_interval": "5m",  # 5-minute buckets
+                                "min_doc_count": 0,  # Show empty buckets for continuity
+                            }
+                        },
                     }
                 }
+
                 res = es.search(idx["versions_index"], body)
                 aggs = res.get("aggregations", {}) or {}
                 min_ts = (aggs.get("min_ts", {}) or {}).get("value")
                 max_ts = (aggs.get("max_ts", {}) or {}).get("value")
                 hist_buckets = (aggs.get("hist", {}) or {}).get("buckets", [])
+
+                # Hard limit: return max 500 buckets
+                MAX_BUCKETS = 500
+                original_bucket_count = len(hist_buckets)
+                if original_bucket_count > MAX_BUCKETS:
+                    # Downsample by taking every Nth bucket
+                    stride = original_bucket_count // MAX_BUCKETS
+                    hist_buckets = hist_buckets[::stride]
+                    logger.info(f"[timeline/stats] Downsampled from {original_bucket_count} to {len(hist_buckets)} buckets (stride={stride})")
+
                 series = [{"key": b.get("key"), "count": b.get("doc_count")} for b in hist_buckets]
-                _json_response(self, 200, {"min": min_ts, "max": max_ts, "series": series})
+                _json_response(self, 200, {
+                    "min": min_ts,
+                    "max": max_ts,
+                    "series": series,
+                    "bucket_count": len(series),
+                    "interval": "5m",
+                    "filtered": bool(file_paths),
+                    "file_count": len(file_paths) if file_paths else None,
+                })
             except (URLError, HTTPError):
                 _json_response(self, 503, {"error": f"Cannot reach Elasticsearch at {cfg.elasticsearch.host}"})
             return
@@ -605,6 +664,9 @@ class RewindexHandler(BaseHTTPRequestHandler):
                 RewindexHandler.watcher_stop = threading.Event()
                 cfg = Config.load(Path.cwd())
                 def on_update(res: Dict[str, Any]):
+                    import time as time_mod
+                    RewindexHandler.watcher_last_update = time_mod.time()
+                    RewindexHandler.watcher_iteration_count += 1
                     BROKER.publish({"type": "index", "update": res})
                 def on_event(ev: Dict[str, Any]):
                     # file-level event
@@ -865,6 +927,9 @@ def run(host: str = "127.0.0.1", port: int = 8899, beads_root: str | None = None
         RewindexHandler.watcher_stop = threading.Event()
 
         def on_update(res: Dict[str, Any]):
+            import time as time_mod
+            RewindexHandler.watcher_last_update = time_mod.time()
+            RewindexHandler.watcher_iteration_count += 1
             BROKER.publish({"type": "index", "update": res})
 
         def on_event(ev: Dict[str, Any]):
