@@ -253,8 +253,10 @@ class RewindexHandler(BaseHTTPRequestHandler):
                 self.send_error(400, "Missing path param")
                 return
             try:
+                # Force refresh to get latest data
                 es = ESClient(cfg.elasticsearch.host)
                 idx = ensure_indices(es, cfg.resolved_index_prefix())
+                es.refresh(idx["files_index"])  # Ensure latest changes are visible
                 doc_id = f"{cfg.project.id}:{p}"
                 doc = es.get_doc(idx["files_index"], doc_id)
                 _json_response(self, 200, (doc or {}).get("_source", {}))
@@ -268,15 +270,24 @@ class RewindexHandler(BaseHTTPRequestHandler):
                 self.send_error(400, "Missing path param")
                 return
             try:
+                # Force refresh to get latest versions
                 es = ESClient(cfg.elasticsearch.host)
                 idx = ensure_indices(es, cfg.resolved_index_prefix())
+                es.refresh(idx["versions_index"])  # Ensure latest versions are visible
                 body = {
                     "query": {"bool": {"must": [{"term": {"file_path": p}}]}},
                     "sort": [{"created_at": {"order": "desc"}}],
                     "size": 200,
                 }
                 res = es.search(idx["versions_index"], body)
-                out = [h.get("_source", {}) for h in res.get("hits", {}).get("hits", [])]
+                hits = res.get("hits", {}).get("hits", [])
+                out = [h.get("_source", {}) for h in hits]
+
+                # Debug logging
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.info(f"[/file/history] path={p}, versions={len(out)}")
+
                 _json_response(self, 200, {"versions": out})
             except (URLError, HTTPError):
                 _json_response(self, 503, {"error": f"Cannot reach Elasticsearch at {cfg.elasticsearch.host}"})
@@ -296,8 +307,76 @@ class RewindexHandler(BaseHTTPRequestHandler):
                 _json_response(self, 503, {"error": f"Cannot reach Elasticsearch at {cfg.elasticsearch.host}"})
             return
 
+        if path_only == "/stats/overview":
+            # Aggregate stats by language for dashboard view
+            try:
+                es = ESClient(cfg.elasticsearch.host)
+                idx = ensure_indices(es, cfg.resolved_index_prefix())
+
+                # Multi-level aggregation: by language, get file count, version count, total size
+                body = {
+                    "size": 0,
+                    "query": {"term": {"is_current": True}},  # Only current files
+                    "aggs": {
+                        "by_language": {
+                            "terms": {
+                                "field": "language",
+                                "size": 50,  # Support up to 50 languages
+                                "order": {"_count": "desc"}
+                            },
+                            "aggs": {
+                                "total_bytes": {"sum": {"field": "size_bytes"}},
+                                "total_lines": {"sum": {"field": "line_count"}},
+                                "avg_size": {"avg": {"field": "size_bytes"}}
+                            }
+                        }
+                    }
+                }
+
+                res = es.search(idx["files_index"], body)
+                aggs = res.get("aggregations", {}) or {}
+                lang_buckets = (aggs.get("by_language", {}) or {}).get("buckets", [])
+
+                # Get version counts per language from versions index
+                versions_body = {
+                    "size": 0,
+                    "aggs": {
+                        "by_language": {
+                            "terms": {
+                                "field": "language",
+                                "size": 50
+                            }
+                        }
+                    }
+                }
+                versions_res = es.search(idx["versions_index"], versions_body)
+                versions_aggs = versions_res.get("aggregations", {}) or {}
+                versions_buckets = (versions_aggs.get("by_language", {}) or {}).get("buckets", [])
+                versions_by_lang = {b["key"]: b["doc_count"] for b in versions_buckets}
+
+                # Build stats array
+                stats = []
+                for bucket in lang_buckets:
+                    lang = bucket["key"]
+                    stats.append({
+                        "language": lang,
+                        "file_count": bucket["doc_count"],
+                        "version_count": versions_by_lang.get(lang, 0),
+                        "total_bytes": bucket.get("total_bytes", {}).get("value", 0),
+                        "total_lines": bucket.get("total_lines", {}).get("value", 0),
+                        "avg_size": bucket.get("avg_size", {}).get("value", 0)
+                    })
+
+                _json_response(self, 200, {"stats": stats})
+            except (URLError, HTTPError):
+                _json_response(self, 503, {"error": f"Cannot reach Elasticsearch at {cfg.elasticsearch.host}"})
+            return
+
         if path_only == "/timeline/stats":
             try:
+                import logging
+                logger = logging.getLogger(__name__)
+
                 es = ESClient(cfg.elasticsearch.host)
                 idx = ensure_indices(es, cfg.resolved_index_prefix())
 

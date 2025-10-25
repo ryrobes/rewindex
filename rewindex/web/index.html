@@ -125,7 +125,13 @@
         <button id="cancelOverlay" class="btn overlay-btn cancel">Cancel</button>
       </div>
     </div>
-    <div id="overlayEditorContainer" class="overlay-editor-container"></div>
+    <div class="overlay-content-wrapper">
+      <div id="overlayEditorContainer" class="overlay-editor-container"></div>
+      <div id="versionHistorySidebar" class="version-history-sidebar" style="display:none;">
+        <div class="version-history-header">History</div>
+        <div id="versionHistoryContent" class="version-history-content"></div>
+      </div>
+    </div>
     <div id="fileTimeline" class="file-timeline" style="display:none;">
       <div class="file-timeline-label">File History</div>
       <div class="file-timeline-track">
@@ -141,7 +147,13 @@
         <button id="closeDiff" class="btn overlay-btn cancel">Close</button>
       </div>
     </div>
-    <div id="diffEditorContainer" class="overlay-editor-container"></div>
+    <div class="overlay-content-wrapper">
+      <div id="diffEditorContainer" class="overlay-editor-container"></div>
+      <div id="diffVersionHistorySidebar" class="version-history-sidebar" style="display:none;">
+        <div class="version-history-header">History</div>
+        <div id="diffVersionHistoryContent" class="version-history-content"></div>
+      </div>
+    </div>
     <div id="diffTimeline" class="file-timeline" style="display:none;">
       <div class="file-timeline-label">File History</div>
       <div class="file-timeline-track">

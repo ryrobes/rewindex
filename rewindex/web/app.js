@@ -34,9 +34,13 @@
   const cancelOverlayBtn = document.getElementById('cancelOverlay');
   const fileTimelineEl = document.getElementById('fileTimeline');
   const fileTimelineMarkersEl = document.getElementById('fileTimelineMarkers');
+  const versionHistorySidebar = document.getElementById('versionHistorySidebar');
+  const versionHistoryContent = document.getElementById('versionHistoryContent');
   const diffOverlayEl = document.getElementById('diffOverlay');
   const diffTimelineEl = document.getElementById('diffTimeline');
   const diffTimelineMarkersEl = document.getElementById('diffTimelineMarkers');
+  const diffVersionHistorySidebar = document.getElementById('diffVersionHistorySidebar');
+  const diffVersionHistoryContent = document.getElementById('diffVersionHistoryContent');
   const diffFilePathEl = document.getElementById('diffFilePath');
   const diffEditorContainer = document.getElementById('diffEditorContainer');
   const restoreDiffBtn = document.getElementById('restoreDiff');
@@ -497,6 +501,9 @@
       lastSearchResults = [];
       timelineFilePaths = []; // Also clear timeline file paths
 
+      // Clear results header (match count display)
+      if(resultsHeaderEl) resultsHeaderEl.innerHTML = '';
+
       // Clear all filter panels when primary is cleared
       while(filterPanels.length > 0){
         removeFilterPanel(filterPanels[0].id);
@@ -507,15 +514,20 @@
         console.warn('[doSearch] Timeline refresh failed:', e);
       });
 
-      // In results-only mode, clear canvas when search is empty
+      // In results-only mode, clear canvas and show overview
       if(resultsOnlyMode){
-        resultsEl.innerHTML = '<div class="results-count" style="color: #888;">Enter a search query to see results</div>';
         // Clear canvas
         for(const [p, tile] of tiles){ tile.remove(); }
         tiles.clear(); tileContent.clear(); filePos.clear(); fileFolder.clear(); fileLanguages.clear();
         for(const [, el] of folders){ el.remove(); } folders.clear();
+
+        // Show codebase overview stats in empty state (instead of blank message)
+        renderCodebaseOverview();
         return;
       }
+
+      // In show-all mode, just clear the message
+      resultsEl.innerHTML = '<div class="results-count" style="color: #888;">Enter a search query to see results</div>';
 
       // In show-all mode, clear dimming on all tiles
       for(const [,tile] of tiles){ tile.classList.remove('dim'); }
@@ -531,6 +543,12 @@
     // Build filters object
     const filters = currentAsOfMs ? { as_of_ms: currentAsOfMs } : {};
 
+    // Add language filter if active
+    if(currentLanguageFilter){
+      filters.language = [currentLanguageFilter];
+      console.log('🎨 [doSearch] Language filter:', currentLanguageFilter);
+    }
+
     // Add path prefix filter if specified
     const pathPrefix = pathFilterInput?.value?.trim();
     if(pathPrefix){
@@ -539,7 +557,7 @@
       console.log('   Full filters object:', filters);
     }
 
-    // TODO: Add path exclude filter
+    // Add path exclude filter
     const pathExclude = pathExcludeInput?.value?.trim();
     if(pathExclude){
       filters.exclude_paths = pathExclude;
@@ -550,7 +568,7 @@
       query: qEl.value,
       filters: filters,
       options: {
-        limit: 200,
+        limit: 500,
         context_lines: 2,
         highlight: true,
         fuzziness: fuzzyMode ? 'AUTO' : undefined,
@@ -1220,7 +1238,7 @@
         ...(currentAsOfMs ? { as_of_ms: currentAsOfMs } : {})
       },
       options: {
-        limit: 200,
+        limit: 500,
         context_lines: 2,
         highlight: true,
         fuzziness: panel.fuzzyMode ? 'AUTO' : undefined,
@@ -1665,12 +1683,137 @@
 
   async function loadFileHistory(path){
     try{
+      console.log(`📜 [loadFileHistory] Fetching history for: ${path}`);
       const history = await fetchJSON('/file/history?path=' + encodeURIComponent(path));
-      return history.versions || [];
+      const versions = history.versions || [];
+      console.log(`📜 [loadFileHistory] Received ${versions.length} versions`);
+      if(versions.length === 0){
+        console.warn(`📜 [loadFileHistory] No versions found for path: ${path}`);
+        console.warn(`   Make sure this is the exact path stored in ES (not relative)`);
+      }
+      return versions;
     }catch(e){
       console.error('Failed to load file history:', e);
       return [];
     }
+  }
+
+  function renderVersionHistorySidebar(versions, currentPath, currentHash, options = {}){
+    const {
+      sidebarEl = versionHistorySidebar,
+      contentEl = versionHistoryContent,
+      isDiffMode = false
+    } = options;
+
+    if(!sidebarEl || !contentEl) return;
+
+    if(!versions || versions.length === 0){
+      console.warn(`📜 [versionSidebar] No versions to render for ${currentPath}`);
+      sidebarEl.style.display = 'none';
+      return;
+    }
+
+    console.log(`📜 [versionSidebar] Input: ${versions.length} versions for ${currentPath}`);
+    console.log(`📜 [versionSidebar] Current hash: ${currentHash}`);
+
+    // Show sidebar
+    sidebarEl.style.display = 'flex';
+    contentEl.innerHTML = '';
+
+    // Sort versions newest to oldest
+    const sorted = [...versions].sort((a, b) => (b.created_at || 0) - (a.created_at || 0));
+
+    console.log(`📜 [versionSidebar] After sorting: ${sorted.length} versions (rendering all)`);
+
+    sorted.forEach((version, idx) => {
+      // Debug first few versions
+      if(idx < 3){
+        console.log(`  Version ${idx+1}:`, {
+          hash: version.content_hash?.substring(0, 8),
+          created_at: new Date(version.created_at).toLocaleString(),
+          is_current: version.content_hash === currentHash,
+          has_content: !!version.content,
+          content_length: version.content?.length
+        });
+      }
+
+      const miniTile = document.createElement('div');
+      miniTile.className = 'version-mini-tile';
+      miniTile.setAttribute('data-hash', version.content_hash);
+
+      // Mark current version
+      if(version.content_hash === currentHash){
+        miniTile.classList.add('current');
+      }
+
+      // Header with timestamp and hash
+      const header = document.createElement('div');
+      header.className = 'version-mini-header';
+
+      const timeSpan = document.createElement('span');
+      timeSpan.className = 'version-mini-time';
+      const date = new Date(version.created_at);
+      const now = new Date();
+      const diffMs = now - date;
+      const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
+      const diffDays = Math.floor(diffHours / 24);
+
+      if(diffDays > 0){
+        timeSpan.textContent = `${diffDays}d ago`;
+      } else if(diffHours > 0){
+        timeSpan.textContent = `${diffHours}h ago`;
+      } else {
+        const diffMins = Math.floor(diffMs / (1000 * 60));
+        timeSpan.textContent = diffMins > 0 ? `${diffMins}m ago` : 'now';
+      }
+
+      const hashSpan = document.createElement('span');
+      hashSpan.className = 'version-mini-hash';
+      hashSpan.textContent = version.content_hash.substring(0, 6);
+
+      header.appendChild(timeSpan);
+      header.appendChild(hashSpan);
+
+      // Code preview (first 15 lines, syntax highlighted)
+      const codeDiv = document.createElement('div');
+      codeDiv.className = 'version-mini-code';
+
+      const content = version.content || '';
+      const lines = content.split('\n').slice(0, 15); // First 15 lines
+      const preview = lines.join('\n');
+
+      // Use Prism for syntax highlighting
+      const pre = document.createElement('pre');
+      const code = document.createElement('code');
+      code.className = `language-${languageToPrism(version.language)}`;
+      code.textContent = preview;
+      pre.appendChild(code);
+      codeDiv.appendChild(pre);
+
+      // Highlight with Prism
+      if(typeof Prism !== 'undefined'){
+        Prism.highlightElement(code);
+      }
+
+      // Click to open diff with this version
+      miniTile.onclick = () => {
+        console.log(`📜 [versionSidebar] Clicked version ${version.content_hash.substring(0, 8)} (${timeSpan.textContent})`);
+        if(isDiffMode){
+          // Already in diff mode - just update the diff to this version
+          openDiffEditor(currentPath, version.content_hash);
+        } else {
+          // In edit mode - switch to diff mode
+          closeOverlayEditor();
+          openDiffEditor(currentPath, version.content_hash);
+        }
+      };
+
+      miniTile.appendChild(header);
+      miniTile.appendChild(codeDiv);
+      contentEl.appendChild(miniTile);
+    });
+
+    console.log(`✅ [versionSidebar] Rendered ${sorted.length} version previews`);
   }
 
   function renderFileTimeline(versions, currentPath, options = {}){
@@ -1751,12 +1894,14 @@
   }
 
   async function openOverlayEditor(path){
+    console.log(`📝 [openOverlayEditor] Opening file: ${path}`);
     overlayEditorPath = path;
     overlayFilePathEl.textContent = path;
 
     // Fetch file content
     try{
       const data = await fetchJSON('/file?path=' + encodeURIComponent(path));
+      console.log(`📝 [openOverlayEditor] Got file data, content_hash: ${data.content_hash?.substring(0, 8)}`);
 
       // Clear container
       overlayEditorContainer.innerHTML = '';
@@ -1805,13 +1950,23 @@
       // Show overlay
       overlayEditorEl.style.display = 'flex';
 
-      // Load and render file history timeline (only in live mode)
+      // Load and render file history (timeline + sidebar)
       if(!currentAsOfMs){
         const versions = await loadFileHistory(path);
         renderFileTimeline(versions, path);
+
+        // Render version history sidebar with mini previews
+        const liveData = await fetchJSON('/file?path=' + encodeURIComponent(path));
+        const currentHash = liveData.content_hash;
+        renderVersionHistorySidebar(versions, path, currentHash, {
+          sidebarEl: versionHistorySidebar,
+          contentEl: versionHistoryContent,
+          isDiffMode: false
+        });
       } else {
         // Hide timeline when time-traveling globally
         fileTimelineEl.style.display = 'none';
+        versionHistorySidebar.style.display = 'none';
       }
     }catch(e){
       showToast('Failed to load file for editing');
@@ -1954,13 +2109,20 @@
       // Show overlay
       diffOverlayEl.style.display = 'flex';
 
-      // Load and render file history timeline in diff mode
+      // Load and render file history (timeline + sidebar) in diff mode
       const versions = await loadFileHistory(path);
       renderFileTimeline(versions, path, {
         timelineEl: diffTimelineEl,
         markersEl: diffTimelineMarkersEl,
         selectedHash: contentHash,
-        isDiffMode: true,
+        isDiffMode: true
+      });
+
+      // Render version history sidebar with current version highlighted
+      renderVersionHistorySidebar(versions, path, contentHash || liveData.content_hash, {
+        sidebarEl: diffVersionHistorySidebar,
+        contentEl: diffVersionHistoryContent,
+        isDiffMode: true
       });
     }catch(e){
       showToast('Failed to load diff');
@@ -1985,9 +2147,12 @@
     diffHistoricalContent = null;
     diffSelectedHash = null;
     diffOverlayEl.style.display = 'none';
-    // Hide diff timeline
+    // Hide diff timeline and sidebar
     if(diffTimelineEl){
       diffTimelineEl.style.display = 'none';
+    }
+    if(diffVersionHistorySidebar){
+      diffVersionHistorySidebar.style.display = 'none';
     }
   }
 
@@ -4691,7 +4856,7 @@
       }
 
       // Use search results instead of fetching all files
-      const maxFiles = 200;
+      const maxFiles = 500;
       const limitedResults = filteredResults.slice(0, maxFiles);
       list = limitedResults.map(r => r.file_path);
 
@@ -5388,11 +5553,159 @@
   }
 
   // Filter files by language (called when clicking language legend)
+  async function renderCodebaseOverview(){
+    console.log('📊 [renderCodebaseOverview] CALLED');
+    if(!resultsEl){
+      console.error('📊 [renderCodebaseOverview] resultsEl not found!');
+      return;
+    }
+
+    console.log('📊 [renderCodebaseOverview] Fetching codebase stats...');
+
+    try{
+      const data = await fetchJSON('/stats/overview');
+      const stats = data.stats || [];
+
+      if(stats.length === 0){
+        resultsEl.innerHTML = '<div class="results-count" style="color: #888;">No files indexed yet</div>';
+        return;
+      }
+
+      console.log(`📊 [renderCodebaseOverview] Rendering ${stats.length} language stats`);
+
+      // Calculate totals across all languages
+      const totals = stats.reduce((acc, s) => ({
+        files: acc.files + s.file_count,
+        versions: acc.versions + s.version_count,
+        bytes: acc.bytes + s.total_bytes,
+        lines: acc.lines + s.total_lines
+      }), {files: 0, versions: 0, bytes: 0, lines: 0});
+
+      // Create overview container
+      const overview = document.createElement('div');
+      overview.className = 'codebase-overview';
+
+      // Header
+      const header = document.createElement('div');
+      header.className = 'overview-header';
+      // header.innerHTML = `
+      //   <h3>Index Overview</h3>
+      //   <div class="overview-subtitle">Click any language to filter</div>
+      // `;
+      overview.appendChild(header);
+
+      // Total summary section
+      const summary = document.createElement('div');
+      summary.className = 'overview-summary';
+      const totalMB = (totals.bytes / (1024 * 1024)).toFixed(1);
+      const avgChurn = totals.files > 0 ? (totals.versions / totals.files).toFixed(1) : 0;
+      summary.innerHTML = `
+        <div class="summary-stat">
+          <div class="summary-value">${totals.files.toLocaleString()}</div>
+          <div class="summary-label">Files</div>
+        </div>
+        <div class="summary-stat">
+          <div class="summary-value">${totals.versions.toLocaleString()}</div>
+          <div class="summary-label">Versions</div>
+        </div>
+        <div class="summary-stat">
+          <div class="summary-value">${avgChurn}×</div>
+          <div class="summary-label">Avg Churn</div>
+        </div>
+        <div class="summary-stat">
+          <div class="summary-value">${totalMB} MB</div>
+          <div class="summary-label">Total Size</div>
+        </div>
+        <div class="summary-stat">
+          <div class="summary-value">${totals.lines.toLocaleString()}</div>
+          <div class="summary-label">Total Lines</div>
+        </div>
+        <div class="summary-stat">
+          <div class="summary-value">${stats.length}</div>
+          <div class="summary-label">Languages</div>
+        </div>
+      `;
+      overview.appendChild(summary);
+
+      // Stats grid
+      const grid = document.createElement('div');
+      grid.className = 'stats-grid';
+
+      stats.forEach(stat => {
+        const card = document.createElement('div');
+        card.className = 'stat-card';
+        card.setAttribute('data-language', stat.language);
+
+        // Get language color (reuse existing color scheme)
+        const langColor = getLanguageColor(stat.language);
+
+        // Calculate churn rate (versions per file)
+        const churnRate = stat.file_count > 0 ? (stat.version_count / stat.file_count).toFixed(1) : 0;
+
+        // Format bytes
+        const totalMB = (stat.total_bytes / (1024 * 1024)).toFixed(1);
+        const avgKB = (stat.avg_size / 1024).toFixed(1);
+
+        card.innerHTML = `
+          <div class="stat-card-header" style="border-left: 3px solid ${langColor}">
+            <div class="stat-lang-name">${stat.language}</div>
+            <div class="stat-lang-color" style="background: ${langColor}"></div>
+          </div>
+          <div class="stat-card-body">
+            <div class="stat-row">
+              <div class="stat-label">Files</div>
+              <div class="stat-value">${stat.file_count.toLocaleString()}</div>
+            </div>
+            <div class="stat-row">
+              <div class="stat-label">Versions</div>
+              <div class="stat-value">${stat.version_count.toLocaleString()}</div>
+            </div>
+            <div class="stat-row">
+              <div class="stat-label">Churn</div>
+              <div class="stat-value">${churnRate}×</div>
+            </div>
+            <div class="stat-row">
+              <div class="stat-label">Size</div>
+              <div class="stat-value">${totalMB} MB</div>
+            </div>
+          </div>
+        `;
+
+        // Click to filter by this language (using existing system)
+        card.onclick = async () => {
+          console.log(`📊 [overview] Clicked language: ${stat.language}`);
+
+          // Set language filter BEFORE search
+          currentLanguageFilter = stat.language;
+          updateLanguageBar();
+
+          // Set query to wildcard and trigger search
+          qEl.value = '*';
+
+          // doSearch() will apply the language filter automatically
+          await doSearch();
+        };
+
+        grid.appendChild(card);
+      });
+
+      overview.appendChild(grid);
+      resultsEl.innerHTML = '';
+      resultsEl.appendChild(overview);
+
+      console.log('✅ [renderCodebaseOverview] Rendered stats grid');
+    }catch(e){
+      console.error('[renderCodebaseOverview] Error:', e);
+      resultsEl.innerHTML = '<div class="results-count" style="color: #888;">Error loading stats</div>';
+    }
+  }
+
   async function filterByLanguage(lang){
     console.log('🔍 [filterByLanguage]', { lang, current: currentLanguageFilter });
 
     // Toggle: if clicking same language, clear filter
-    if(currentLanguageFilter === lang){
+    const wasFiltered = currentLanguageFilter === lang;
+    if(wasFiltered){
       currentLanguageFilter = null;
       console.log('✅ Cleared language filter');
     } else {
@@ -5403,6 +5716,15 @@
     // Update language bar to show active state
     updateLanguageBar();
 
+    // If we're clearing the filter OR setting a new one, re-run the search
+    // This ensures the backend query includes/excludes the language filter
+    if(qEl.value && qEl.value.trim()){
+      console.log('🔄 Re-running search with updated language filter');
+      await doSearch();
+      return;
+    }
+
+    // Old behavior: only for when search results already exist
     // In results-only mode, re-render with filter applied
     if(resultsOnlyMode && lastSearchResults.length > 0){
       // refreshAllTiles will apply the language filter
@@ -5474,10 +5796,10 @@
 
   async function spawnAll(){
     try{
-      // RESULTS-ONLY MODE: Skip loading all files on initial load
-      // User must perform a search first
+      // RESULTS-ONLY MODE: Show codebase overview on initial load
       if(resultsOnlyMode){
-        resultsEl.innerHTML = '<div class="results-count" style="color: #888; padding: 10px;"></div>';
+        console.log('📋 [spawnAll] Results-only mode: Showing codebase overview');
+        renderCodebaseOverview();
         return;
       }
 
