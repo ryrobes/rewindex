@@ -103,6 +103,146 @@
   let preloadAbortController = null; // Allow cancelling in-progress preload
   let preloadCache = new Map(); // Cache fetched file data: path -> {content, language, ...}
 
+  // ==================== Input History Management ====================
+  // Manages persistent history for search input, path filter, and exclude filter
+  class InputHistoryManager {
+    constructor(maxItems = 20) {
+      this.maxItems = maxItems;
+    }
+
+    add(key, value) {
+      if (!value || !value.trim()) return;
+      const trimmed = value.trim();
+      let history = this.get(key);
+      // Remove if exists (we'll add to front for MRU ordering)
+      history = history.filter(v => v !== trimmed);
+      // Add to front
+      history.unshift(trimmed);
+      // Limit size
+      if (history.length > this.maxItems) {
+        history = history.slice(0, this.maxItems);
+      }
+      try {
+        localStorage.setItem(key, JSON.stringify(history));
+      } catch(e) {
+        console.warn('Failed to save input history:', e);
+      }
+    }
+
+    get(key) {
+      try {
+        const data = localStorage.getItem(key);
+        return data ? JSON.parse(data) : [];
+      } catch(e) {
+        console.warn('Failed to load input history:', e);
+        return [];
+      }
+    }
+
+    remove(key, value) {
+      let history = this.get(key);
+      history = history.filter(v => v !== value);
+      try {
+        localStorage.setItem(key, JSON.stringify(history));
+      } catch(e) {
+        console.warn('Failed to update input history:', e);
+      }
+    }
+
+    clear(key) {
+      try {
+        localStorage.removeItem(key);
+      } catch(e) {
+        console.warn('Failed to clear input history:', e);
+      }
+    }
+  }
+
+  const historyManager = new InputHistoryManager(20);
+  const HISTORY_KEYS = {
+    search: 'rewindex_search_history',
+    path: 'rewindex_path_history',
+    exclude: 'rewindex_exclude_history'
+  };
+
+  let currentHistoryPanel = null;
+
+  function showHistoryPanel(inputEl, historyKey, onSelect) {
+    hideHistoryPanel(); // Hide any existing panel
+
+    const history = historyManager.get(historyKey);
+    if (history.length === 0) return; // No history to show
+
+    const panel = document.createElement('div');
+    panel.className = 'history-panel';
+
+    history.forEach(value => {
+      const item = document.createElement('div');
+      item.className = 'history-item';
+
+      const text = document.createElement('span');
+      text.className = 'history-text';
+      text.textContent = value;
+      text.addEventListener('click', () => {
+        onSelect(value);
+        hideHistoryPanel();
+      });
+
+      const deleteBtn = document.createElement('button');
+      deleteBtn.className = 'history-delete';
+      deleteBtn.textContent = '×';
+      deleteBtn.title = 'Remove from history';
+      deleteBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        historyManager.remove(historyKey, value);
+        item.remove();
+        // Hide panel if no items left
+        if (panel.querySelectorAll('.history-item').length === 0) {
+          hideHistoryPanel();
+        }
+      });
+
+      item.appendChild(text);
+      item.appendChild(deleteBtn);
+      panel.appendChild(item);
+    });
+
+    // Position below input
+    const rect = inputEl.getBoundingClientRect();
+    panel.style.top = `${rect.bottom + 2}px`;
+    panel.style.left = `${rect.left}px`;
+    panel.style.width = `${rect.width}px`;
+
+    document.body.appendChild(panel);
+    currentHistoryPanel = panel;
+
+    // Prevent panel clicks from immediately triggering blur
+    panel.addEventListener('mousedown', (e) => {
+      e.preventDefault(); // Prevent input blur
+    });
+  }
+
+  function hideHistoryPanel() {
+    if (currentHistoryPanel) {
+      currentHistoryPanel.remove();
+      currentHistoryPanel = null;
+    }
+  }
+
+  function saveCurrentInputsToHistory() {
+    // Save current values to history when a search is performed
+    if (qEl.value.trim()) {
+      historyManager.add(HISTORY_KEYS.search, qEl.value.trim());
+    }
+    if (pathFilterInput && pathFilterInput.value.trim()) {
+      historyManager.add(HISTORY_KEYS.path, pathFilterInput.value.trim());
+    }
+    if (pathExcludeInput && pathExcludeInput.value.trim()) {
+      historyManager.add(HISTORY_KEYS.exclude, pathExcludeInput.value.trim());
+    }
+  }
+  // ==================== End Input History Management ====================
+
   // PERFORMANCE MONITORING: Track memory usage
   let perfMemoryCheckInterval = null;
   function startMemoryMonitoring(){
@@ -463,6 +603,9 @@
       resultCount: results.length,
       tilesNow: tiles.size
     });
+
+    // Save search inputs to history
+    saveCurrentInputsToHistory();
 
     // Start background preload of file content (non-blocking)
     if(results.length > 0){
@@ -1630,7 +1773,11 @@
       showToast(`Saved: ${overlayEditorPath}`);
       closeOverlayEditor();
 
-      // Refresh tile content
+      // Invalidate cache to ensure fresh content on next load
+      preloadCache.delete(overlayEditorPath);
+      tileContent.delete(overlayEditorPath);
+
+      // Refresh tile content (will fetch fresh from server now)
       await refreshTileContent(overlayEditorPath);
     }catch(e){
       showToast(`Failed to save: ${e.message || e}`);
@@ -1785,7 +1932,11 @@
       confirmModalEl.style.display = 'none';
       closeDiffEditor();
 
-      // Refresh tile content
+      // Invalidate cache to ensure fresh content on next load
+      preloadCache.delete(diffEditorPath);
+      tileContent.delete(diffEditorPath);
+
+      // Refresh tile content (will fetch fresh from server now)
       await refreshTileContent(diffEditorPath);
 
       // Flash the tile to show it was updated
@@ -3250,6 +3401,74 @@
     });
   }
 
+  // ==================== Input History Focus/Blur Handlers ====================
+  // Show history panel on focus, hide on blur
+  qEl.addEventListener('focus', () => {
+    showHistoryPanel(qEl, HISTORY_KEYS.search, (value) => {
+      qEl.value = value;
+      doSearch();
+    });
+  });
+
+  qEl.addEventListener('blur', () => {
+    // Delay to allow clicks on panel
+    setTimeout(() => {
+      if (!currentHistoryPanel || !currentHistoryPanel.matches(':hover')) {
+        hideHistoryPanel();
+      }
+    }, 150);
+  });
+
+  if (pathFilterInput) {
+    pathFilterInput.addEventListener('focus', () => {
+      showHistoryPanel(pathFilterInput, HISTORY_KEYS.path, (value) => {
+        pathFilterInput.value = value;
+        if (qEl.value.trim()) {
+          doSearch();
+        }
+      });
+    });
+
+    pathFilterInput.addEventListener('blur', () => {
+      setTimeout(() => {
+        if (!currentHistoryPanel || !currentHistoryPanel.matches(':hover')) {
+          hideHistoryPanel();
+        }
+      }, 150);
+    });
+  }
+
+  if (pathExcludeInput) {
+    pathExcludeInput.addEventListener('focus', () => {
+      showHistoryPanel(pathExcludeInput, HISTORY_KEYS.exclude, (value) => {
+        pathExcludeInput.value = value;
+        if (qEl.value.trim()) {
+          doSearch();
+        }
+      });
+    });
+
+    pathExcludeInput.addEventListener('blur', () => {
+      setTimeout(() => {
+        if (!currentHistoryPanel || !currentHistoryPanel.matches(':hover')) {
+          hideHistoryPanel();
+        }
+      }, 150);
+    });
+  }
+
+  // Close history panel when clicking outside
+  document.addEventListener('click', (e) => {
+    if (currentHistoryPanel &&
+        !currentHistoryPanel.contains(e.target) &&
+        e.target !== qEl &&
+        e.target !== pathFilterInput &&
+        e.target !== pathExcludeInput) {
+      hideHistoryPanel();
+    }
+  });
+  // ==================== End Input History Handlers ====================
+
   // Deleted files toggle
   if(deletedToggleBtn){
     deletedToggleBtn.onclick = ()=>{
@@ -3710,7 +3929,7 @@
             renderRecentUpdates();
           }
 
-          showToast(`${action === 'added' ? 'Indexed' : 'Updated'}: ${path}`);
+          //showToast(`${action === 'added' ? 'Indexed' : 'Updated'}: ${path}`);
           refreshTileContent(path);
           flashTile(path, 'update');
           refreshTimeline(); // Update timeline when files are indexed
@@ -4104,6 +4323,32 @@
     }, 1800);
   }
 
+  // Helper: Calculate visible viewport dimensions accounting for UI elements
+  function getVisibleViewport(){
+    const ws = workspace.getBoundingClientRect();
+    const FILTER_PANEL_WIDTH = 300; // Must match CSS .filter-panel width
+
+    // Calculate total width covered by UI elements on the left
+    const filterPanelsWidth = filterPanels.length * FILTER_PANEL_WIDTH;
+    const leftCoverage = sidebarWidth + filterPanelsWidth;
+
+    // Calculate visible area (the part not covered by sidebar/panels)
+    const visibleWidth = ws.width - leftCoverage;
+    const visibleHeight = ws.height;
+
+    // Calculate the center point of the visible area in workspace coordinates
+    const visibleCenterX = leftCoverage + (visibleWidth / 2);
+    const visibleCenterY = visibleHeight / 2;
+
+    return {
+      width: visibleWidth,
+      height: visibleHeight,
+      centerX: visibleCenterX,
+      centerY: visibleCenterY,
+      leftCoverage: leftCoverage
+    };
+  }
+
   function centerOnTile(path, opts={}){
     console.log('🎬 [centerOnTile] START', { path, isAnimating, animHandle, animId: currentAnimationId });
 
@@ -4120,7 +4365,10 @@
 
     const tile = tiles.get(path);
     if(!tile) return;
-    const ws = workspace.getBoundingClientRect();
+
+    // Get visible viewport accounting for sidebar and filter panels
+    const viewport = getVisibleViewport();
+
     // world coords (pre-transform)
     const worldX = parseFloat(tile.style.left) || 0;
     const worldY = parseFloat(tile.style.top) || 0;
@@ -4129,20 +4377,18 @@
     const cx = worldX + w/2;
     const cy = worldY + h/2;
 
-    // Determine target scale: zoom to fit if requested
+    // Determine target scale: zoom to fit VISIBLE viewport
     let targetScale = scale;
     if(opts.zoomToFit !== false){
-      const fitW = (ws.width * 0.65) / w;
-      const fitH = (ws.height * 0.65) / h;
+      // Use visible viewport dimensions with some padding (0.7 = 70% of visible area)
+      const fitW = (viewport.width * 0.7) / w;
+      const fitH = (viewport.height * 0.7) / h;
       targetScale = Math.min(2.5, Math.max(0.05, Math.min(fitW, fitH)));
     }
 
-    // Bias to the right by ~100px to account for sidebar coverage
-    const sidebarBias = 100;
-
-    // Compute target offsets to center tile (with right bias)
-    const targetOffsetX = (ws.width/2 + sidebarBias) - (targetScale * cx);
-    const targetOffsetY = (ws.height/2) - (targetScale * cy);
+    // Compute target offsets to center tile in VISIBLE viewport
+    const targetOffsetX = viewport.centerX - (targetScale * cx);
+    const targetOffsetY = viewport.centerY - (targetScale * cy);
 
     // FUN CINEMATIC ANIMATION: If already zoomed in, zoom out first, then pan, then zoom in
     const ZOOM_THRESHOLD = 0.8; // Consider "zoomed in" if scale > 0.8
@@ -4163,20 +4409,20 @@
     // Stage 1: Zoom out to wide view
     const pullbackScale = Math.max(0.3, scale * 0.4); // Zoom out to 40% of current (min 0.3)
 
-    const ws = workspace.getBoundingClientRect();
-    const sidebarBias = 100;
+    // Get visible viewport for accurate centering
+    const viewport = getVisibleViewport();
 
-    // Calculate current center in world coords
-    const currentCenterX = (-offsetX + ws.width / 2) / scale;
-    const currentCenterY = (-offsetY + ws.height / 2) / scale;
+    // Calculate current center in world coords (using visible viewport center)
+    const currentCenterX = (-offsetX + viewport.centerX) / scale;
+    const currentCenterY = (-offsetY + viewport.centerY) / scale;
 
-    // Stage 1: Zoom out while keeping current center
-    const pullbackOffsetX = (ws.width / 2) - (pullbackScale * currentCenterX);
-    const pullbackOffsetY = (ws.height / 2) - (pullbackScale * currentCenterY);
+    // Stage 1: Zoom out while keeping current center in visible viewport
+    const pullbackOffsetX = viewport.centerX - (pullbackScale * currentCenterX);
+    const pullbackOffsetY = viewport.centerY - (pullbackScale * currentCenterY);
 
     // Stage 2: Calculate offset to center target (cx, cy) AT THE PULLBACK SCALE
-    const targetOffsetXAtPullback = (ws.width / 2 + sidebarBias) - (pullbackScale * cx);
-    const targetOffsetYAtPullback = (ws.height / 2) - (pullbackScale * cy);
+    const targetOffsetXAtPullback = viewport.centerX - (pullbackScale * cx);
+    const targetOffsetYAtPullback = viewport.centerY - (pullbackScale * cy);
 
     // Stage 1: Zoom out (200ms) - keep current center
     animatePanZoom(pullbackOffsetX, pullbackOffsetY, pullbackScale, 200, () => {
