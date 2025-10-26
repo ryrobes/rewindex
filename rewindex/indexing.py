@@ -94,11 +94,18 @@ def _generate_image_preview(path: Path, max_size_kb: int = 50) -> Optional[str]:
     import subprocess
     import base64
     import tempfile
+    import logging
+
+    logger = logging.getLogger(__name__)
 
     try:
         # Check file size
         size_kb = path.stat().st_size / 1024
+        print(f"📸 [preview] Generating for {path.name} ({size_kb:.1f}KB)")
+        logger.info(f"📸 [preview] Generating for {path.name} ({size_kb:.1f}KB)")
+
         if size_kb > max_size_kb * 10:  # Allow larger files with convert (10x limit)
+            logger.warning(f"⚠️  [preview] Skipping {path.name}: too large ({size_kb:.1f}KB > {max_size_kb * 10}KB)")
             return None
 
         # Try ImageMagick convert first (handles images + videos!)
@@ -118,6 +125,27 @@ def _generate_image_preview(path: Path, max_size_kb: int = 50) -> Optional[str]:
             ], capture_output=True, timeout=5, check=False)
 
             if result.returncode == 0:
+                print(f"✅ [preview] ImageMagick success: {path.name}")
+                logger.info(f"✅ [preview] ImageMagick success: {path.name}")
+
+                # Get ORIGINAL image dimensions (before thumbnailing)
+                original_result = subprocess.run([
+                    'identify',
+                    '-format', '%w %h',
+                    str(path)
+                ], capture_output=True, timeout=2, check=False)
+
+                original_width = None
+                original_height = None
+                if original_result.returncode == 0:
+                    try:
+                        w, h = original_result.stdout.decode().strip().split()
+                        original_width = int(w)
+                        original_height = int(h)
+                        print(f"   📐 Original dimensions: {original_width}x{original_height}")
+                    except:
+                        pass
+
                 # Get actual dimensions of generated thumbnail
                 size_result = subprocess.run([
                     'identify',
@@ -132,6 +160,7 @@ def _generate_image_preview(path: Path, max_size_kb: int = 50) -> Optional[str]:
                         w, h = size_result.stdout.decode().strip().split()
                         thumb_width = int(w)
                         thumb_height = int(h)
+                        print(f"   📐 Thumbnail dimensions: {thumb_width}x{thumb_height}")
                     except:
                         pass
 
@@ -150,35 +179,64 @@ def _generate_image_preview(path: Path, max_size_kb: int = 50) -> Optional[str]:
                 return {
                     'data': f"data:image/png;base64,{b64}",
                     'width': thumb_width,
-                    'height': thumb_height
+                    'height': thumb_height,
+                    'original_width': original_width,
+                    'original_height': original_height
                 }
+            else:
+                # ImageMagick failed
+                stderr = result.stderr.decode('utf-8', errors='ignore').strip()
+                print(f"❌ [preview] ImageMagick failed for {path.name}: {stderr[:100]}")
+                logger.warning(f"❌ [preview] ImageMagick failed for {path.name}: {stderr[:100]}")
 
-        except (subprocess.TimeoutExpired, FileNotFoundError):
-            # Convert not available or timed out, fall back
-            pass
+        except subprocess.TimeoutExpired:
+            print(f"⏱️  [preview] ImageMagick timeout for {path.name}")
+            logger.warning(f"⏱️  [preview] ImageMagick timeout for {path.name}")
+        except FileNotFoundError:
+            print(f"🔧 [preview] ImageMagick not installed (convert command not found)")
+            logger.warning(f"🔧 [preview] ImageMagick not installed (convert command not found)")
 
         # Fallback to PIL if available
         try:
+            print(f"🔄 [preview] Trying PIL fallback for {path.name}")
+            logger.info(f"🔄 [preview] Trying PIL fallback for {path.name}")
             from PIL import Image
             from io import BytesIO
 
             if size_kb > max_size_kb:
+                print(f"⚠️  [preview] Skipping {path.name} for PIL: too large ({size_kb:.1f}KB > {max_size_kb}KB)")
+                logger.warning(f"⚠️  [preview] Skipping {path.name} for PIL: too large ({size_kb:.1f}KB > {max_size_kb}KB)")
                 return None
 
             img = Image.open(path)
+            original_size = img.size
+            print(f"   📐 Original dimensions: {original_size[0]}x{original_size[1]}")
+
             img.thumbnail((150, 150))
+            final_size = img.size
+            print(f"   📐 Thumbnail dimensions: {final_size[0]}x{final_size[1]}")
 
             buffer = BytesIO()
             img.save(buffer, format='PNG')
             b64 = base64.b64encode(buffer.getvalue()).decode('utf-8')
-            return f"data:image/png;base64,{b64}"
+            print(f"✅ [preview] PIL success: {path.name}")
+            logger.info(f"✅ [preview] PIL success: {path.name}")
+            return {
+                'data': f"data:image/png;base64,{b64}",
+                'width': final_size[0],
+                'height': final_size[1],
+                'original_width': original_size[0],
+                'original_height': original_size[1]
+            }
         except ImportError:
-            pass
+            logger.warning(f"📦 [preview] PIL not available (pip install Pillow)")
+        except Exception as pil_error:
+            logger.warning(f"❌ [preview] PIL failed for {path.name}: {pil_error}")
 
         return None
 
     except Exception as e:
-        # Silent failure for preview generation
+        logger.error(f"💥 [preview] Unexpected error for {path.name}: {e}")
         return None
 
 
@@ -481,8 +539,13 @@ def _index_binary_file(
     # Generate preview for images/videos
     preview_data = None
     if binary_type in ('image', 'video', 'document'):
+        print(f"🎨 [index_binary_file] Attempting preview for {file_path.name} (type: {binary_type})")
         max_kb = getattr(cfg.indexing, 'binary_preview_max_kb', 50)
         preview_data = _generate_image_preview(file_path, max_size_kb=max_kb)
+        if preview_data:
+            print(f"✅ [index_binary_file] Preview generated successfully for {file_path.name}")
+        else:
+            print(f"❌ [index_binary_file] Preview generation returned None for {file_path.name}")
 
     file_id = f"{project_id}:{rel_path}"
     existing = es.get_doc(files_index, file_id)
@@ -522,10 +585,13 @@ def _index_binary_file(
     # Add preview if available (not searchable, just for display)
     if preview_data:
         if isinstance(preview_data, dict):
-            # New format with dimensions
+            # New format with dimensions (thumbnail + original)
             body["preview_base64"] = preview_data.get('data')
-            body["preview_width"] = preview_data.get('width')
-            body["preview_height"] = preview_data.get('height')
+            body["preview_width"] = preview_data.get('width')  # Thumbnail width
+            body["preview_height"] = preview_data.get('height')  # Thumbnail height
+            body["original_width"] = preview_data.get('original_width')  # Original image width
+            body["original_height"] = preview_data.get('original_height')  # Original image height
+            print(f"   💾 Storing: preview={body['preview_width']}x{body['preview_height']}, original={body.get('original_width')}x{body.get('original_height')}")
         else:
             # Old format (string only)
             body["preview_base64"] = preview_data

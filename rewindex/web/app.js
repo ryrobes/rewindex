@@ -2285,16 +2285,55 @@
     const x = nextX; const y = nextY; nextX += 640; if(nextX > 1600){ nextX = 0; nextY += 460; } return [x,y];
   }
 
+  // Calculate tile dimensions based on file type and image aspect ratio
+  function calculateTileSize(path){
+    const meta = fileMeta.get(path) || {};
+
+    // For binary files (images) use ORIGINAL dimensions for aspect ratio
+    if(meta.is_binary && meta.original_width && meta.original_height){
+      const aspect = meta.original_width / meta.original_height;
+      console.log(`🖼️  [calculateTileSize] Image ${path.split('/').pop()}: ${meta.original_width}x${meta.original_height}, aspect=${aspect.toFixed(2)}`);
+
+      if(aspect > 1.5){
+        // Wide landscape image
+        console.log(`   → Wide landscape: 800×400`);
+        return { w: 800, h: 400 };
+      } else if(aspect > 1.2){
+        // Landscape image
+        console.log(`   → Landscape: 600×400`);
+        return { w: 600, h: 400 };
+      } else if(aspect < 0.7){
+        // Tall portrait image
+        console.log(`   → Tall portrait: 300×600`);
+        return { w: 300, h: 600 };
+      } else if(aspect < 0.85){
+        // Portrait image
+        console.log(`   → Portrait: 400×500`);
+        return { w: 400, h: 500 };
+      } else {
+        // Square-ish image
+        console.log(`   → Square: 400×400`);
+        return { w: 400, h: 400 };
+      }
+    } else if(meta.is_binary){
+      console.log(`⚠️  [calculateTileSize] Binary file ${path.split('/').pop()} has NO original dimensions`);
+    }
+
+    // Default size for text files
+    return { w: 600, h: 400 };
+  }
+
   async function openTile(path){
     // Check if tile already exists
     const existingTile = tiles.get(path);
     if(existingTile){
-      // IMPORTANT: Update position even for existing tiles
-      // This fixes the bug where tiles stack at 0,0 after layout changes
+      // Update dimensions if changed (MiniMasonry will reposition on next layout() call)
       const pos = filePos.get(path);
       if(pos){
-        existingTile.style.left = `${pos.x}px`;
-        existingTile.style.top = `${pos.y}px`;
+        // Update position if available (treemap mode has x,y)
+        if(pos.x !== undefined) existingTile.style.left = `${pos.x}px`;
+        if(pos.y !== undefined) existingTile.style.top = `${pos.y}px`;
+        // Update dimensions
         if(pos.w) existingTile.style.width = `${pos.w}px`;
         if(pos.h) existingTile.style.height = `${pos.h}px`;
       }
@@ -2305,24 +2344,27 @@
     const tile = document.createElement('div');
     tile.className = 'tile';
     const pos = filePos.get(path);
-    if(!pos){
-      // Position not available yet - this shouldn't happen in normal flow
-      // but can occur if openTile is called before layout is complete
-      //console.warn(`[openTile] No position found for ${path}, using default`);
-      tile.style.left = '0px';
-      tile.style.top = '0px';
-    } else {
+
+    // Set position if available (treemap mode, or after minimasonry calculates)
+    if(pos && pos.x !== undefined && pos.y !== undefined){
       tile.style.left = `${pos.x}px`;
       tile.style.top = `${pos.y}px`;
-      // Apply dimensions if specified (treemap mode)
-      if(pos.w){
-        tile.style.width = `${pos.w}px`;
-        tile.setAttribute('data-default-width', pos.w);
-      }
-      if(pos.h){
-        tile.style.height = `${pos.h}px`;
-        tile.setAttribute('data-default-height', pos.h);
-      }
+    } else {
+      // MiniMasonry will calculate position, set default for now
+      tile.style.left = '0px';
+      tile.style.top = '0px';
+    }
+
+    // Apply dimensions if available (from layoutSimpleGrid or layoutTreemap)
+    if(pos && pos.w){
+      tile.style.width = `${pos.w}px`;
+      tile.setAttribute('data-default-width', pos.w);
+      console.log(`📏 [openTile] Applied width ${pos.w}px to ${path.split('/').pop()}`);
+    }
+    if(pos && pos.h){
+      tile.style.height = `${pos.h}px`;
+      tile.setAttribute('data-default-height', pos.h);
+      console.log(`📏 [openTile] Applied height ${pos.h}px to ${path.split('/').pop()}`);
     }
     const title = document.createElement('div');
     title.className = 'title';
@@ -3499,31 +3541,63 @@
   }
 
   function layoutSimpleGrid(paths){
-    // SIMPLE GRID LAYOUT - uniform tiles, square-ish grid
+    // SIMPLE GRID LAYOUT - Shelf packing algorithm (NFDH - Next-Fit Decreasing Height)
+    // Like stacking books on shelves - no overlaps guaranteed!
     for(const [, el] of folders){ el.remove(); }
     folders.clear(); filePos.clear(); fileFolder.clear();
 
-    const tileW = 600;
-    const tileH = 400;
+    if(paths.length === 0) return;
+
+    // Calculate tile sizes based on aspect ratios
+    const tileSizes = paths.map(p => {
+      const size = calculateTileSize(p);
+      return { path: p, ...size };
+    });
+
+    // Sort by height descending (tallest first for better packing)
+    tileSizes.sort((a, b) => b.h - a.h);
+
+    console.log(`📐 [layoutSimpleGrid] ${paths.length} tiles with shelf-packing (NFDH)`);
+    console.log(`   Sample sizes:`, tileSizes.slice(0, 3).map(t => `${t.path.split('/').pop()}: ${t.w}x${t.h}`));
+
     const gap = 40;
-    const startX = 40;
-    const startY = 40;
-    const n = paths.length;
-    const tilesPerRow = Math.ceil(Math.sqrt(n));
+    const containerWidth = 4800; // Virtual canvas width for pan/zoom
 
-    console.log(`📐 [layoutSimpleGrid] ${n} tiles → ${tilesPerRow} cols, uniform size`);
+    let shelfX = gap;      // Current X position in this shelf
+    let shelfY = gap;      // Y position of current shelf
+    let shelfHeight = 0;   // Height of tallest tile in current shelf
+    let shelfCount = 0;
 
-    let x = startX, y = startY, col = 0;
-    for(const p of paths){
-      filePos.set(p, { x, y });
-      fileFolder.set(p, '');
-      col++;
-      if(col >= tilesPerRow){
-        col = 0; x = startX; y += tileH + gap;
-      } else {
-        x += tileW + gap;
+    for(const tileInfo of tileSizes){
+      // Check if tile fits in current shelf
+      if(shelfX > gap && shelfX + tileInfo.w + gap > containerWidth){
+        // Tile doesn't fit - start new shelf below
+        shelfX = gap;
+        shelfY += shelfHeight + gap;
+        shelfHeight = 0;
+        shelfCount++;
       }
+
+      // Place tile at current position
+      filePos.set(tileInfo.path, {
+        x: shelfX,
+        y: shelfY,
+        w: tileInfo.w,
+        h: tileInfo.h
+      });
+      fileFolder.set(tileInfo.path, '');
+
+      // Update shelf state
+      shelfX += tileInfo.w + gap;
+      shelfHeight = Math.max(shelfHeight, tileInfo.h);
     }
+
+    const finalHeight = shelfY + shelfHeight + gap;
+
+    console.log(`✅ [layoutSimpleGrid] Shelf-packing complete`);
+    console.log(`   Shelves: ${shelfCount + 1}`);
+    console.log(`   Canvas: ${containerWidth}x${finalHeight.toFixed(0)}px`);
+    console.log(`   Efficiency: ${((tileSizes.reduce((s,t) => s + t.w*t.h, 0) / (containerWidth * finalHeight)) * 100).toFixed(1)}% filled`);
   }
 
   function layoutTreemap(paths){
@@ -3575,9 +3649,43 @@
 
     // Assign sizes based on relative size (better scaling without sqrt compression)
     const sizedItems = items.map(item => {
-      // Use linear ratio with gentle power (sqrt was too compressive)
+      const meta = fileMeta.get(item.path) || {};
+
+      // For images, use aspect ratio to determine base dimensions
+      if(meta.is_binary && meta.preview_width && meta.preview_height){
+        const aspect = meta.preview_width / meta.preview_height;
+        const ratio = item.size / totalSize;
+        const scale = Math.max(0.5, Math.min(4.0, Math.pow(ratio * items.length * 2, 0.6)));
+
+        // Apply aspect ratio to base size
+        let w, h;
+        if(aspect > 1.5){
+          // Wide landscape
+          w = Math.max(minTileW, Math.min(maxTileW, minTileW * scale * 1.3));
+          h = Math.max(minTileH, Math.min(maxTileH, minTileH * scale * 0.8));
+        } else if(aspect > 1.0){
+          // Landscape
+          w = Math.max(minTileW, Math.min(maxTileW, minTileW * scale * 1.1));
+          h = Math.max(minTileH, Math.min(maxTileH, minTileH * scale * 0.9));
+        } else if(aspect < 0.7){
+          // Tall portrait
+          w = Math.max(minTileW, Math.min(maxTileW, minTileW * scale * 0.7));
+          h = Math.max(minTileH, Math.min(maxTileH, minTileH * scale * 1.3));
+        } else if(aspect < 1.0){
+          // Portrait
+          w = Math.max(minTileW, Math.min(maxTileW, minTileW * scale * 0.8));
+          h = Math.max(minTileH, Math.min(maxTileH, minTileH * scale * 1.1));
+        } else {
+          // Square
+          w = Math.max(minTileW, Math.min(maxTileW, minTileW * scale));
+          h = Math.max(minTileH, Math.min(maxTileH, minTileH * scale));
+        }
+        return { ...item, w, h, x: 0, y: 0 };
+      }
+
+      // For text files, use standard calculation
       const ratio = item.size / totalSize;
-      const scale = Math.max(0.5, Math.min(4.0, Math.pow(ratio * items.length * 2, 0.6))); // Power 0.6 for gentle curve
+      const scale = Math.max(0.5, Math.min(4.0, Math.pow(ratio * items.length * 2, 0.6)));
       const w = Math.max(minTileW, Math.min(maxTileW, minTileW * scale));
       const h = Math.max(minTileH, Math.min(maxTileH, minTileH * scale));
       return { ...item, w, h, x: 0, y: 0 };
@@ -5104,15 +5212,17 @@
       list = limitedResults.map(r => r.file_path);
 
       // Fetch metadata for these specific files
-      // NOTE: Metadata is in the nested metadata object from search results
+      // NOTE: Most metadata is nested, but preview fields are top-level
       filesWithMeta = limitedResults.map(r => ({
         file_path: r.file_path,
         size_bytes: (r.metadata && r.metadata.size_bytes) || 0,
         line_count: (r.metadata && r.metadata.line_count) || 1,
         language: r.language || 'text',
         is_binary: r.is_binary || false,
-        preview_width: (r.metadata && r.metadata.preview_width) || null,
-        preview_height: (r.metadata && r.metadata.preview_height) || null
+        preview_width: r.preview_width || null,  // Thumbnail width
+        preview_height: r.preview_height || null,  // Thumbnail height
+        original_width: r.original_width || null,  // Original image width
+        original_height: r.original_height || null  // Original image height
       }));
     }
     // SHOW ALL MODE: Fetch all files from index
@@ -5137,13 +5247,25 @@
     fileLanguages.clear(); // Clear before repopulating
     for(const f of filesWithMeta){
       if(f.file_path){
-        fileMeta.set(f.file_path, {
+        const meta = {
           size_bytes: f.size_bytes || 0,
           line_count: f.line_count || 1,
           is_binary: f.is_binary || false,
-          preview_width: f.preview_width || null,
-          preview_height: f.preview_height || null
-        });
+          preview_width: f.preview_width || null,  // Thumbnail width
+          preview_height: f.preview_height || null,  // Thumbnail height
+          original_width: f.original_width || null,  // Original image width
+          original_height: f.original_height || null  // Original image height
+        };
+        fileMeta.set(f.file_path, meta);
+
+        // Debug log for binary files
+        if(meta.is_binary){
+          console.log(`💾 [fileMeta] ${f.file_path}:`, {
+            preview: `${meta.preview_width}x${meta.preview_height}`,
+            original: `${meta.original_width}x${meta.original_height}`
+          });
+        }
+
         // Populate language data early for language bar
         if(f.language){
           fileLanguages.set(f.file_path, f.language);
@@ -5201,14 +5323,18 @@
 
     // Use treemap (flat or with folders), simple grid (results-only), or traditional layout based on mode
     if(treemapMode && treemapFoldersMode){
+      console.log('🗺️  [refreshAllTiles] Using TREEMAP WITH FOLDERS mode (OLD manual positioning)');
       const tree = buildTree(list);
       layoutTreemapWithFolders(tree);
     } else if(treemapMode){
+      console.log('🗺️  [refreshAllTiles] Using TREEMAP mode (OLD manual spiral packing)');
       layoutTreemap(list);
     } else if(resultsOnlyMode){
+      console.log('📊 [refreshAllTiles] Using SIMPLE GRID mode (shelf-packing algorithm)');
       // RESULTS-ONLY MODE: Use simple grid layout (no folder hierarchy for performance)
       layoutSimpleGrid(list);
     } else {
+      console.log('📁 [refreshAllTiles] Using SHOW ALL mode (OLD folder hierarchy)');
       // SHOW ALL MODE: Use traditional folder hierarchy layout
       const tree = buildTree(list);
       layoutAndRender(tree);
@@ -5224,6 +5350,49 @@
 
     // Show canvas again after all tiles created (batch DOM update complete)
     canvas.style.display = 'block';
+
+    // Verify no overlaps in simple grid mode (bin-packing should be perfect)
+    if(resultsOnlyMode && !treemapMode){
+      setTimeout(() => {
+        let overlaps = 0;
+        const positions = [];
+
+        for(const [path, tile] of tiles){
+          const x = parseFloat(tile.style.left) || 0;
+          const y = parseFloat(tile.style.top) || 0;
+          const w = parseFloat(tile.style.width) || 600;
+          const h = parseFloat(tile.style.height) || 400;
+
+          // Check for overlaps
+          for(const other of positions){
+            if(!(x + w <= other.x || x >= other.x + other.w || y + h <= other.y || y >= other.y + other.h)){
+              overlaps++;
+              console.error(`   ❌ Overlap detected: ${path.split('/').pop()} overlaps with another tile`);
+            }
+          }
+          positions.push({ x, y, w, h, path });
+        }
+
+        const maxX = Math.max(...positions.map(p => p.x + p.w));
+        const maxY = Math.max(...positions.map(p => p.y + p.h));
+
+        console.log('🔍 [Verification] Checking layout quality:');
+        console.log(`   Canvas bounds: ${maxX.toFixed(0)}x${maxY.toFixed(0)}px`);
+        console.log(`   Overlaps: ${overlaps} ${overlaps === 0 ? '✅ Perfect!' : '❌ ERROR!'}`);
+
+        if(overlaps > 0){
+          console.error('   ⚠️  OVERLAP DETECTED - This should never happen with shelf-packing!');
+        }
+
+        console.log(`   Sample positions:`, positions.slice(0, 5).map(p => ({
+          file: p.path.split('/').pop(),
+          x: p.x.toFixed(0),
+          y: p.y.toFixed(0),
+          w: p.w.toFixed(0),
+          h: p.h.toFixed(0)
+        })));
+      }, 50);
+    }
 
     // Apply folder colors and update language bar
     // PERFORMANCE: Skip folder colors in results-only mode (no folders in simple grid layout)
@@ -6133,13 +6302,18 @@
       const res = await fetchJSON('/files');
       const list = res.files || [];
 
-      // Store file metadata for treemap mode
+      // Store file metadata for treemap mode and image sizing
       fileMeta.clear();
       for(const f of list){
         if(f.file_path){
           fileMeta.set(f.file_path, {
             size_bytes: f.size_bytes || 0,
-            line_count: f.line_count || 1
+            line_count: f.line_count || 1,
+            is_binary: f.is_binary || false,
+            preview_width: f.preview_width || null,  // Thumbnail width
+            preview_height: f.preview_height || null,  // Thumbnail height
+            original_width: f.original_width || null,  // Original image width
+            original_height: f.original_height || null  // Original image height
           });
         }
       }
@@ -7132,6 +7306,7 @@
   // Load theme on startup
   loadSystemTheme();
 
+  
   // ============================================================================
   // END OMARCHY THEME INTEGRATION
   // ============================================================================
