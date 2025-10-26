@@ -7388,7 +7388,7 @@ function initPhysicsSimulation(){
 
   // Listen for block-to-block collisions
   Matter.Events.on(window.physicsEngine, 'collisionStart', (event) => {
-    console.log('💥 [physics] Collision event:', event.pairs.length, 'pairs');
+    //console.log('💥 [physics] Collision event:', event.pairs.length, 'pairs');
     event.pairs.forEach(pair => {
       const bodyA = pair.bodyA;
       const bodyB = pair.bodyB;
@@ -7397,7 +7397,7 @@ function initPhysicsSimulation(){
       const isBlockA = window.fallingBlocks.has(bodyA.id);
       const isBlockB = window.fallingBlocks.has(bodyB.id);
 
-      console.log('💥 [physics] Pair:', {isBlockA, isBlockB, bodyAId: bodyA.id, bodyBId: bodyB.id});
+      //console.log('💥 [physics] Pair:', {isBlockA, isBlockB, bodyAId: bodyA.id, bodyBId: bodyB.id});
 
       if(isBlockA && isBlockB){
         const colorA = bodyA.render.fillStyle;
@@ -7410,9 +7410,9 @@ function initPhysicsSimulation(){
         const relativeVelocity = Math.sqrt(
           Math.pow(vA.x - vB.x, 2) + Math.pow(vA.y - vB.y, 2)
         );
-        
-        console.log('💥 [physics] Block collision! Velocity:', relativeVelocity.toFixed(2));
-        
+
+        //console.log('💥 [physics] Block collision! Velocity:', relativeVelocity.toFixed(2));
+
         if(point && window.spawnCollisionParticles){
           window.spawnCollisionParticles(point, colorA, colorB, relativeVelocity);
         }
@@ -7499,7 +7499,8 @@ window.spawnFallingFileBlock = function(fileData){
   // Access function from window/global scope
   const colorFn = window.getLanguageColor || getLanguageColor;
   if(typeof colorFn === 'function'){
-    color = colorFn(language) + '70';
+    colorFull = colorFn(language)
+    color = colorFull + '70';
   } else {
     console.warn('🎨 [physics] getLanguageColor not accessible from physics context');
   }
@@ -7507,33 +7508,37 @@ window.spawnFallingFileBlock = function(fileData){
   console.log(`🎨 [physics] Language: "${language}", Color: ${color}, languageColors size:`, Object.keys(window.languageColors || {}).length);
 
   const block = Matter.Bodies.rectangle(x, y, width, height, {
-    restitution: 0.4,
-    friction: 0.6,
+    restitution: 0.6,
+    friction: 0.5,
     density: 0.002,
     angle: (Math.random() - 0.5) * 0.3,
     angularVelocity: (Math.random() - 0.5) * 0.15,
     render: {
       fillStyle: color,
-      //strokeStyle: 'rgba(255, 255, 255, 0.3)', 
-      //lineWidth: 2,
+      strokeStyle: colorFull || '#000000', 
+      lineWidth: 2, 
       opacity: 0.85
     }
   });
 
   Matter.World.add(window.physicsWorld, block);
 
+  const date = new Date(Date.now());
+  const readable = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')} ${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}:${String(date.getSeconds()).padStart(2, '0')}`;
+  // Example: "2025-10-26 15:45:30"  
+
   window.fallingBlocks.set(block.id, {
     path: file_path,
     displayPath: displayPath,
     language,
-    action,
+    action: action + ' ' + readable,  
     createdAt: Date.now(),
     body: block
   });
 
   console.log(`🎮 [physics] Spawned: ${displayPath} (${language})`);
 
-  // Cleanup old blocks
+  // Cleanup old blocks 
   if(window.fallingBlocks.size > 40){
     const oldest = Array.from(window.fallingBlocks.values())
       .sort((a, b) => a.createdAt - b.createdAt)[0];
@@ -7599,7 +7604,7 @@ if(window.physicsEngine){
 }
 
 window.spawnCollisionParticles = function(point, colorA, colorB){
-  console.log('✨ [particles] Spawning at', point, 'colors:', colorA, colorB);
+  //console.log('✨ [particles] Spawning at', point, 'colors:', colorA, colorB);
   if(!point) return;
 
   // Mix the two colors
@@ -7607,14 +7612,13 @@ window.spawnCollisionParticles = function(point, colorA, colorB){
 
   // Spawn 6-10 small particles
   const particleCount = Math.floor(Math.random() * 5) + 6;
-  console.log('✨ [particles] Creating', particleCount, 'particles, color:', mixedColor);
+  //console.log('✨ [particles] Creating', particleCount, 'particles, color:', mixedColor);
 
   for(let i = 0; i < particleCount; i++){
     const angle = Math.random() * Math.PI * 2;
     const speed = Math.random() * 3 + 2;
     const vx = Math.cos(angle) * speed;
     const vy = Math.sin(angle) * speed - 2; // Slight upward bias
-
 
     const particle = { 
       x: point.x,
@@ -7644,9 +7648,9 @@ window.updateParticles = function(){
   if(!ctx) return;
 
   // Debug: log particle count occasionally
-  if(window.collisionParticles.length > 0 && Math.random() < 0.05){
-    console.log('✨ [particles] Active particles:', window.collisionParticles.length);
-  }
+  // if(window.collisionParticles.length > 0 && Math.random() < 0.05){
+  //   console.log('✨ [particles] Active particles:', window.collisionParticles.length);
+  // }
 
   // Update physics
   for(let i = window.collisionParticles.length - 1; i >= 0; i--){

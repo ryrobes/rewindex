@@ -8,5 +8,8 @@
     "host": "localhost:9200",
     "index_prefix": "rewindex_${project.id}"
   },
-  "indexing": {"index_binaries": true}
+  "indexing": {
+    "index_binaries": true,
+    "parallel_workers": 6
+  }
 }

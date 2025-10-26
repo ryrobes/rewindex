@@ -104,9 +104,8 @@ def _generate_image_preview(path: Path, max_size_kb: int = 50) -> Optional[str]:
         print(f"📸 [preview] Generating for {path.name} ({size_kb:.1f}KB)")
         logger.info(f"📸 [preview] Generating for {path.name} ({size_kb:.1f}KB)")
 
-        if size_kb > max_size_kb * 10:  # Allow larger files with convert (10x limit)
-            logger.warning(f"⚠️  [preview] Skipping {path.name}: too large ({size_kb:.1f}KB > {max_size_kb * 10}KB)")
-            return None
+        # No size limit! We're generating thumbnails (max 200x200), so output is always small
+        # ImageMagick can handle multi-MB images efficiently
 
         # Try ImageMagick convert first (handles images + videos!)
         try:
@@ -203,11 +202,7 @@ def _generate_image_preview(path: Path, max_size_kb: int = 50) -> Optional[str]:
             from PIL import Image
             from io import BytesIO
 
-            if size_kb > max_size_kb:
-                print(f"⚠️  [preview] Skipping {path.name} for PIL: too large ({size_kb:.1f}KB > {max_size_kb}KB)")
-                logger.warning(f"⚠️  [preview] Skipping {path.name} for PIL: too large ({size_kb:.1f}KB > {max_size_kb}KB)")
-                return None
-
+            # No size limit - PIL can handle large images, we're thumbnailing to 150x150
             img = Image.open(path)
             original_size = img.size
             print(f"   📐 Original dimensions: {original_size[0]}x{original_size[1]}")
@@ -282,6 +277,9 @@ def iter_candidate_files(root: Path, cfg: Config) -> Iterator[Path]:
 
 
 def index_project(project_root: Path, cfg: Config, on_event: Optional[Callable[[Dict[str, object]], None]] = None, verbose: bool = False) -> Dict[str, int]:
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    import threading
+
     extractor = SimpleExtractor()
     root = project_root.resolve()
 
@@ -297,36 +295,71 @@ def index_project(project_root: Path, cfg: Config, on_event: Optional[Callable[[
     new_hash_to_path: dict[str, str] = {}
     project_id = cfg.project.id
 
+    # Thread-safe counters
+    lock = threading.Lock()
+
     if verbose:
         print(f"[rewindex] Scanning files in {project_root}...")
         print(f"[rewindex] Binary indexing: {'ENABLED' if cfg.indexing.index_binaries else 'DISABLED'}")
+        print(f"[rewindex] Config check: index_binaries = {getattr(cfg.indexing, 'index_binaries', 'NOT SET')}")
 
-    for path in iter_candidate_files(root, cfg):
+    # Collect all files first
+    all_files = list(iter_candidate_files(root, cfg))
+    print(f"[rewindex] Found {len(all_files)} candidate files")
+
+    # Determine worker count
+    max_workers = getattr(cfg.indexing, 'parallel_workers', 1)
+    if max_workers > 1:
+        print(f"[rewindex] Using {max_workers} parallel workers for indexing")
+
+    # Helper function to process a single file (for parallel execution)
+    def process_file(path):
+        nonlocal added, updated, skipped
         rel_path = str(path.relative_to(root))
-        present_paths.add(rel_path)
+
+        with lock:
+            present_paths.add(rel_path)
 
         # Check if binary first
         is_binary = _is_binary_file(path)
         if is_binary and not cfg.indexing.index_binaries:
-            skipped += 1
-            continue
+            with lock:
+                skipped += 1
+            return
 
         if is_binary:
-            # Index binary file
+            # Index binary file with preview generation
+            stat = path.stat()
             binary_type = _get_binary_type(path.suffix)
             if verbose:
                 print(f"  [BINARY-{binary_type.upper()}] {rel_path}")
-            # This will be handled by index_single_file in the future
-            # For now in bulk indexing, skip
-            skipped += 1
-            continue
 
+            action = _index_binary_file(
+                path, rel_path, stat, root, cfg, es,
+                files_index, versions_index, project_id, on_event
+            )
+
+            if verbose:
+                print(f"     → Action: {action}")
+
+            with lock:
+                if action == "added":
+                    added += 1
+                elif action == "updated":
+                    updated += 1
+                else:
+                    skipped += 1
+            return
+
+        # Text file processing
         content = _read_text(path)
         if content is None:
-            skipped += 1
+            with lock:
+                skipped += 1
             if verbose:
                 print(f"  [SKIPPED] {rel_path} (could not read)")
-            continue
+            return
+
         h = sha256_hex(content.encode("utf-8", errors="ignore"))
         stat = path.stat()
         lang = detect_language(path)
@@ -358,28 +391,30 @@ def index_project(project_root: Path, cfg: Config, on_event: Optional[Callable[[
         }
 
         es.put_doc(files_index, file_id, body)
-        new_hash_to_path[h] = rel_path
 
-        if prev_hash is None:
-            added += 1
-            if verbose:
-                print(f"  [ADDED] {rel_path} ({lang})")
-            if on_event is not None:
-                try:
-                    on_event({"action": "added", "file_path": rel_path, "language": lang})
-                except Exception:
-                    pass
-        elif prev_hash != h:
-            updated += 1
-            if verbose:
-                print(f"  [UPDATED] {rel_path} ({lang})")
-            if on_event is not None:
-                try:
-                    on_event({"action": "updated", "file_path": rel_path, "language": lang})
-                except Exception:
-                    pass
-        else:
-            skipped += 1
+        with lock:
+            new_hash_to_path[h] = rel_path
+
+            if prev_hash is None:
+                added += 1
+                if verbose:
+                    print(f"  [ADDED] {rel_path} ({lang})")
+                if on_event is not None:
+                    try:
+                        on_event({"action": "added", "file_path": rel_path, "language": lang})
+                    except Exception:
+                        pass
+            elif prev_hash != h:
+                updated += 1
+                if verbose:
+                    print(f"  [UPDATED] {rel_path} ({lang})")
+                if on_event is not None:
+                    try:
+                        on_event({"action": "updated", "file_path": rel_path, "language": lang})
+                    except Exception:
+                        pass
+            else:
+                skipped += 1
 
         # Versioning: add a new version if changed
         if prev_hash != h:
@@ -417,6 +452,37 @@ def index_project(project_root: Path, cfg: Config, on_event: Optional[Callable[[
                     "project_id": project_id,
                 },
             )
+
+    # Execute indexing with parallel workers if configured
+    if max_workers > 1:
+        # Parallel execution with progress tracking
+        print(f"[rewindex] Starting parallel indexing with {max_workers} workers...")
+        completed_count = 0
+        progress_interval = max(1, len(all_files) // 20)  # Report every 5%
+
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = [executor.submit(process_file, path) for path in all_files]
+
+            # Wait for all to complete with progress reporting
+            for future in as_completed(futures):
+                try:
+                    future.result()
+                    completed_count += 1
+
+                    # Progress reporting (every 5% or so)
+                    if completed_count % progress_interval == 0 or completed_count == len(all_files):
+                        pct = (completed_count / len(all_files)) * 100
+                        print(f"[rewindex] Progress: {completed_count}/{len(all_files)} ({pct:.0f}%) - added: {added}, updated: {updated}, skipped: {skipped}")
+                except Exception as e:
+                    print(f"[rewindex] ERROR indexing file: {e}")
+                    import traceback
+                    traceback.print_exc()
+    else:
+        # Sequential execution (original behavior)
+        for i, path in enumerate(all_files, 1):
+            process_file(path)
+            if verbose and i % 100 == 0:
+                print(f"[rewindex] Progress: {i}/{len(all_files)}")
 
     # Handle deletions/renames: mark any previously-current docs not present on disk as not current/deleted
     _mark_missing_as_deleted(es, files_index, project_id, present_paths, new_hash_to_path)
@@ -536,16 +602,19 @@ def _index_binary_file(
     extension = file_path.suffix
     binary_type = _get_binary_type(extension)
 
-    # Generate preview for images/videos
+    # Generate preview for images only (skip documents/videos/etc for speed)
     preview_data = None
-    if binary_type in ('image', 'video', 'document'):
+    if binary_type == 'image':  # Only actual image files
         print(f"🎨 [index_binary_file] Attempting preview for {file_path.name} (type: {binary_type})")
         max_kb = getattr(cfg.indexing, 'binary_preview_max_kb', 50)
         preview_data = _generate_image_preview(file_path, max_size_kb=max_kb)
         if preview_data:
             print(f"✅ [index_binary_file] Preview generated successfully for {file_path.name}")
         else:
-            print(f"❌ [index_binary_file] Preview generation returned None for {file_path.name}")
+            print(f"⚠️  [index_binary_file] Preview generation returned None for {file_path.name}")
+    elif binary_type in ('document', 'video', 'audio', 'archive'):
+        # Skip preview generation for non-image binaries
+        pass
 
     file_id = f"{project_id}:{rel_path}"
     existing = es.get_doc(files_index, file_id)

@@ -160,17 +160,23 @@ def cmd_index_rebuild(args: argparse.Namespace) -> int:
         versions_index = idx["versions_index"]
         if args.clean:
             # Delete and recreate indices with current schema
+            print(f"🗑️  [rebuild --clean] Deleting indices...")
             try:
                 es.delete_index(files_index)
-            except Exception:
-                pass
+                print(f"   ✅ Deleted {files_index}")
+            except Exception as e:
+                print(f"   ⚠️  Could not delete {files_index}: {e}")
             try:
                 es.delete_index(versions_index)
-            except Exception:
-                pass
+                print(f"   ✅ Deleted {versions_index}")
+            except Exception as e:
+                print(f"   ⚠️  Could not delete {versions_index}: {e}")
+            print(f"🔄 [rebuild --clean] Recreating indices...")
             idx = ensure_indices(es, prefix)
-        # Reindex content
-        res = index_project(root, cfg)
+            print(f"   ✅ Indices recreated")
+        # Reindex content (with verbose output to see binary files)
+        print(f"📂 [rebuild] Scanning and indexing files...")
+        res = index_project(root, cfg, verbose=True)
         print(json.dumps({"indices": idx, "result": res}, indent=2))
     except (URLError, HTTPError):
         print(f"Error: could not reach Elasticsearch at {cfg.elasticsearch.host}. Is it running?", file=sys.stderr)
