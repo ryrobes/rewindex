@@ -6,6 +6,17 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Rewindex</title>
   <link rel="stylesheet" href="/static/styles.css" />
+
+  <!-- Load Matter.js FIRST, before Monaco's RequireJS loader -->
+  <script src="https://cdn.jsdelivr.net/npm/matter-js@0.19.0/build/matter.min.js"></script>
+  <script>
+    // Backup Matter before Monaco can interfere
+    if(typeof Matter !== 'undefined'){
+      window.MatterBackup = Matter;
+      console.log('💾 Matter.js loaded and backed up');
+    }
+  </script>
+
   <script>
     // Monaco loader (CDN). If offline, UI falls back to <pre> rendering.
     window.MonacoEnv = { baseUrl: 'https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min/' };
@@ -130,6 +141,9 @@
     </div>
 
     <div id="canvas"></div>
+
+    <!-- Physics canvas for falling files (overlay) -->
+    <canvas id="physicsCanvas" style="position: fixed; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 5;"></canvas>
   </div>
   <div id="overlayEditor" class="overlay-editor" style="display:none;">
     <div class="overlay-header">
@@ -189,6 +203,14 @@
 
 
 
+  
+  <script>
+    window.addEventListener("DOMContentLoaded", () => {
+      console.log("🔍 Matter.js check:", typeof Matter);
+      if(typeof Matter !== "undefined") console.log("✅ Matter.js loaded");
+      else console.error("❌ Matter.js NOT loaded");
+    });
+  </script>
   <script src="/static/app.js"></script>
 </body>
 

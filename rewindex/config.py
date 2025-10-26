@@ -248,6 +248,24 @@ class Config:
                     cfg.indexing.exclude_patterns.append(pattern)
             print(f"[config] Loaded {len(rewindexignore_patterns)} patterns from .rewindexignore")
 
+        # If binary indexing is enabled, remove binary file extensions from exclude patterns
+        if cfg.indexing.index_binaries:
+            binary_extensions = [
+                "*.png", "*.jpg", "*.jpeg", "*.gif", "*.bmp", "*.ico", "*.svg",
+                "*.pdf", "*.zip", "*.tar", "*.gz", "*.bz2", "*.7z", "*.rar",
+                "*.exe", "*.dll", "*.so", "*.dylib", "*.bin", "*.dat",
+                "*.woff", "*.woff2", "*.ttf", "*.eot", "*.otf",
+                "*.mp3", "*.mp4", "*.avi", "*.mov", "*.wav", "*.mkv", "*.webm",
+                "*.doc", "*.docx", "*.xls", "*.xlsx", "*.ppt", "*.pptx"
+            ]
+            original_count = len(cfg.indexing.exclude_patterns)
+            cfg.indexing.exclude_patterns = [
+                p for p in cfg.indexing.exclude_patterns if p not in binary_extensions
+            ]
+            removed = original_count - len(cfg.indexing.exclude_patterns)
+            if removed > 0:
+                print(f"[config] Binary indexing enabled: removed {removed} binary extension patterns from exclusions")
+
         return cfg
 
     def resolved_index_prefix(self) -> str:

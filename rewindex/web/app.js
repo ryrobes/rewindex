@@ -4477,6 +4477,16 @@
         const data = JSON.parse(ev.data || '{}');
         const path = data.file_path || data.path;
         const action = data.action || 'updated';
+
+        // Spawn falling block if in overview mode
+        if(!qEl.value.trim() && resultsOnlyMode && typeof window.spawnFallingFileBlock === 'function'){
+          window.spawnFallingFileBlock({
+            file_path: path,
+            language: data.language || 'text',
+            action: action
+          });
+        }
+
         if(path){
           // Track recent update
           recentUpdates.unshift({
@@ -4927,7 +4937,7 @@
     linePath.setAttribute('d', linePathBefore);
     linePath.setAttribute('fill', 'none');
     linePath.setAttribute('stroke', accentColor || '#39bae6');
-    linePath.setAttribute('stroke-width', '1.5');
+    linePath.setAttribute('stroke-width', '1');
     linePath.setAttribute('stroke-opacity', '1');
     svg.appendChild(linePath);
 
@@ -4945,7 +4955,7 @@
       linePathDimmed.setAttribute('d', linePathAfter);
       linePathDimmed.setAttribute('fill', 'none');
       linePathDimmed.setAttribute('stroke', accentColor || '#39bae6');
-      linePathDimmed.setAttribute('stroke-width', '1.5');
+      linePathDimmed.setAttribute('stroke-width', '1');
       linePathDimmed.setAttribute('stroke-opacity', '0.15'); // Much dimmer
       linePathDimmed.setAttribute('stroke-dasharray', '4,4'); // Dashed to show it's "future"
       linePathDimmed.setAttribute('class', 'timeline-future-dimmed');
@@ -7040,3 +7050,195 @@
   setTimeout(startMemoryMonitoring, 1000);
 
 })();
+
+// ============================================================================
+// FALLING FILES PHYSICS SIMULATION
+// ============================================================================
+
+// Physics variables declared at top with other globals
+if(typeof window.physicsEngine === 'undefined'){
+  window.physicsEngine = null;
+  window.physicsWorld = null;
+  window.physicsRender = null;
+  window.fallingBlocks = new Map();
+  window.fallingFilesEnabled = true;
+}
+
+function initPhysicsSimulation(){
+  if(typeof Matter === 'undefined'){
+    console.warn('⚠️  Matter.js not loaded, falling files disabled');
+    return;
+  }
+
+  console.log('🎮 [physics] Initializing Matter.js...');
+
+  const pCanvas = document.getElementById('physicsCanvas');
+  if(!pCanvas) return;
+
+  // Create engine  
+  window.physicsEngine = Matter.Engine.create({
+    gravity: { x: 0, y: 0.8 }
+  });
+  window.physicsWorld = window.physicsEngine.world;
+
+  // Setup canvas
+  const width = pCanvas.width = window.innerWidth;
+  const height = pCanvas.height = window.innerHeight;
+
+  window.physicsRender = Matter.Render.create({
+    canvas: pCanvas,
+    engine: window.physicsEngine,
+    options: {
+      width, height,
+      wireframes: false,
+      background: 'transparent'
+    }
+  });
+
+  // Boundaries
+  const ground = Matter.Bodies.rectangle(width/2, height + 25, width, 50, {
+    isStatic: true,
+    render: { fillStyle: 'transparent' }
+  });
+
+  const leftWall = Matter.Bodies.rectangle(-25, height/2, 50, height, {
+    isStatic: true,
+    render: { fillStyle: 'transparent' }
+  });
+
+  const rightWall = Matter.Bodies.rectangle(width + 25, height/2, 50, height, {
+    isStatic: true,
+    render: { fillStyle: 'transparent' }
+  });
+
+  Matter.World.add(window.physicsWorld, [ground, leftWall, rightWall]);
+
+  // Start engines (use Runner instead of deprecated Engine.run)
+  window.physicsRunner = Matter.Runner.create();
+  Matter.Runner.run(window.physicsRunner, window.physicsEngine);
+  Matter.Render.run(window.physicsRender);
+
+  // Custom text rendering
+  Matter.Events.on(window.physicsRender, 'afterRender', () => {
+    const ctx = window.physicsRender.context;
+    ctx.save();
+
+    window.fallingBlocks.forEach((data) => {
+      const body = data.body;
+      ctx.save();
+      ctx.translate(body.position.x, body.position.y);
+      ctx.rotate(body.angle);
+
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+
+      // Draw action badge at top
+      const action = (data.action || 'updated').toUpperCase();
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.3)';
+      //ctx.strokeStyle = 'rgba(0, 0, 0, 0.8)';
+      ctx.font = '13px monospace';
+      ctx.fontWeight = '400';
+      ctx.lineWidth = 2;
+
+
+      ctx.strokeText(action, 0, -12);
+      ctx.fillText(action, 0, -12);
+
+      // Draw file path at bottom
+      const text = data.displayPath || data.fileName || data.path;
+      ctx.fillStyle = '#fff';
+      //ctx.strokeStyle = 'rgba(0, 0, 0, 0.8)';
+      ctx.font = '15px monospace';
+      ctx.fontWeight = '500';
+      ctx.lineWidth = 4;
+
+      ctx.strokeText(text, 0, 4);
+      ctx.fillText(text, 0, 4);
+
+      ctx.restore();
+    });
+
+    ctx.restore();
+  });
+
+  console.log('✅ [physics] Initialized');
+}
+
+window.spawnFallingFileBlock = function(fileData){
+  if(!window.physicsEngine || !window.fallingFilesEnabled) return;
+
+  const { file_path, language, action } = fileData;
+
+  // Use full path, not just filename
+  const displayPath = file_path;
+
+  // Spawn position: avoid first 500px (sidebar area)
+  const minX = 550;  // After sidebar (435px) + margin
+  const maxX = window.innerWidth - 100;
+  const x = Math.random() * (maxX - minX) + minX;
+  const y = -50;
+
+  // Width based on full path length (make it fit!)
+  const charWidth = 11;  // Approximate monospace char width
+  const padding = 24;
+  const width = Math.min(600, Math.max(150, displayPath.length * charWidth + padding));
+  const height = 60;  // Taller to fit action + path
+
+  // Use existing language color system
+  const color = (typeof getLanguageColor === 'function' ? getLanguageColor(language) : null) || '#39bae6';
+
+  const block = Matter.Bodies.rectangle(x, y, width, height, {
+    restitution: 0.4,
+    friction: 0.6,
+    density: 0.002,
+    angle: (Math.random() - 0.5) * 0.3,
+    angularVelocity: (Math.random() - 0.5) * 0.15,
+    render: {
+      fillStyle: color,
+      //strokeStyle: 'rgba(255, 255, 255, 0.3)',
+      lineWidth: 2,
+      opacity: 0.85
+    }
+  });
+
+  Matter.World.add(window.physicsWorld, block);
+
+  window.fallingBlocks.set(block.id, {
+    path: file_path,
+    displayPath: displayPath,
+    language,
+    action,
+    createdAt: Date.now(),
+    body: block
+  });
+
+  console.log(`🎮 [physics] Spawned: ${displayPath} (${language})`);
+
+  // Cleanup old blocks
+  if(window.fallingBlocks.size > 40){
+    const oldest = Array.from(window.fallingBlocks.values())
+      .sort((a, b) => a.createdAt - b.createdAt)[0];
+    Matter.World.remove(window.physicsWorld, oldest.body);
+    window.fallingBlocks.delete(oldest.body.id);
+  }
+};
+
+// Restore Matter.js and initialize physics
+setTimeout(() => {
+  // Restore from backup if Monaco's RequireJS interfered
+  if(typeof Matter === 'undefined' && typeof window.MatterBackup !== 'undefined'){
+    window.Matter = window.MatterBackup;
+    console.log('🔄 Restored Matter from backup');
+  }
+
+  if(typeof Matter !== 'undefined'){
+    console.log('✅ Matter.js ready! Version:', Matter.version);
+    if(document.getElementById('physicsCanvas')){
+      initPhysicsSimulation();
+    }
+  } else {
+    console.error('❌ Matter.js not available');
+    console.error('   window.MatterBackup:', typeof window.MatterBackup);
+  }
+}, 1500);
+
