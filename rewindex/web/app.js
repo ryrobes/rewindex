@@ -7437,31 +7437,69 @@ function initPhysicsSimulation(){
       ctx.translate(body.position.x, body.position.y);
       ctx.rotate(body.angle);
 
+      // Fade out if exploding
+      if(data.exploding){
+        const age = Date.now() - data.explodedAt;
+        const fadeProgress = Math.min(1, age / 1500);
+        ctx.globalAlpha = 1 - fadeProgress;
+      }
+
+      // Distortion ripple for blocks at risk (countdown effect)
+      if(data.atRisk && !data.exploding){
+        const pulseTime = Date.now() % 1200;
+        const pulseProgress = pulseTime / 1200;
+
+        // Wave distortion - scale pulses in and out
+        const distortAmount = Math.sin(pulseProgress * Math.PI * 2) * 0.08; // ±8% scale
+        const scaleX = 1 + distortAmount;
+        const scaleY = 1 - distortAmount * 0.5; // Opposite direction for wave effect
+
+        ctx.scale(scaleX, scaleY);
+
+        // Subtle red tint on countdown
+        ctx.globalAlpha = 0.9 + Math.sin(pulseProgress * Math.PI * 4) * 0.1;
+        body.render.fillStyle = body.render.fillStyle.replace(/[0-9a-f]{2}$/, 'A0'); // More opaque
+      }
+
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
 
       // Draw action badge at top
       const action = (data.action || 'updated').toUpperCase();
-      ctx.fillStyle = 'rgba(255, 255, 255, 0.3)';
-      //ctx.strokeStyle = 'rgba(0, 0, 0, 0.8)';
+      ctx.fillStyle = data.atRisk ? 'rgba(255, 100, 100, 0.5)' : 'rgba(255, 255, 255, 0.3)';
       ctx.font = '13px monospace';
       ctx.fontWeight = '400';
       ctx.lineWidth = 2;
-
-
-      //ctx.strokeText(action, 0, -12);
       ctx.fillText(action, 0, -12);
 
       // Draw file path at bottom
       const text = data.displayPath || data.fileName || data.path;
       ctx.fillStyle = '#fff';
-      //ctx.strokeStyle = 'rgba(0, 0, 0, 0.8)';
       ctx.font = '15px monospace';
       ctx.fontWeight = '500';
       ctx.lineWidth = 4;
-      //ctx.strokeText(text, 0, 4);
       ctx.fillText(text, 0, 4);
       ctx.restore();
+    });
+
+    // Render crumbling chunks with fade-out (no text, just colored rectangles)
+    const now = Date.now();
+    window.crumblingChunks = (window.crumblingChunks || []).filter(chunkData => {
+      const age = now - chunkData.createdAt;
+      if(age > chunkData.duration){
+        // Remove from physics world when fully faded
+        Matter.World.remove(window.physicsWorld, chunkData.body);
+        return false;
+      }
+
+      // Fade out over duration
+      const fadeProgress = age / chunkData.duration;
+      const opacity = 1 - fadeProgress;
+
+      // Update render opacity (Matter.js will render it)
+      chunkData.body.render.opacity = opacity;
+
+      return true; // Keep chunk until fully faded
     });
 
     ctx.restore();
@@ -7538,14 +7576,176 @@ window.spawnFallingFileBlock = function(fileData){
 
   console.log(`🎮 [physics] Spawned: ${displayPath} (${language})`);
 
-  // Cleanup old blocks 
-  if(window.fallingBlocks.size > 40){
-    const oldest = Array.from(window.fallingBlocks.values())
-      .sort((a, b) => a.createdAt - b.createdAt)[0];
-    Matter.World.remove(window.physicsWorld, oldest.body);
-    window.fallingBlocks.delete(oldest.body.id);
-  }
+  // Smart cleanup: explode old blocks when stack gets too high
+  checkAndExplodeIfNeeded();
 };
+
+// Monitor stack height and trigger explosions if approaching top
+function checkAndExplodeIfNeeded(){
+  if(!window.physicsWorld || window.fallingBlocks.size === 0) return;
+
+  const blocks = Array.from(window.fallingBlocks.values());
+  const viewportHeight = window.innerHeight;
+
+  // Only check blocks that have SETTLED (low velocity = landed on pile)
+  const settledBlocks = blocks.filter(b => {
+    const vel = b.body.velocity;
+    const speed = Math.sqrt(vel.x * vel.x + vel.y * vel.y);
+    const angularSpeed = Math.abs(b.body.angularVelocity);
+
+    // Consider settled if barely moving AND below top 100px (not freshly spawned)
+    return speed < 0.5 && angularSpeed < 0.05 && b.body.position.y > 100;
+  });
+
+  if(settledBlocks.length === 0) return; // No settled blocks yet
+
+  // Find highest SETTLED block (lowest Y value of landed blocks)
+  const minY = Math.min(...settledBlocks.map(b => b.body.position.y));
+  const stackTop = minY;
+
+  // Calculate how much of viewport is filled (0 = empty, 1 = stack at top)
+  const fillRatio = (viewportHeight - stackTop) / viewportHeight;
+
+  // Warning threshold: mark blocks for imminent explosion
+  const WARNING_THRESHOLD = 0.6;
+  const DANGER_THRESHOLD = 0.7;
+
+  // Sort by age
+  const sortedByAge = blocks.sort((a, b) => a.createdAt - b.createdAt);
+
+  // Clear all atRisk flags first
+  blocks.forEach(b => b.atRisk = false);
+
+  // Mark oldest 25% of blocks as "at risk" if stack is getting high
+  if(fillRatio > WARNING_THRESHOLD){
+    const numAtRisk = Math.ceil(blocks.length * 0.25);
+    for(let i = 0; i < numAtRisk; i++){
+      sortedByAge[i].atRisk = true;  // Visual warning (pulsing red glow)
+    }
+  }
+
+  // Debug logging (throttled to avoid spam)
+  if(!window.lastStackCheckLog || Date.now() - window.lastStackCheckLog > 3000){
+    if(settledBlocks.length > 5){ // Only log if there's actually a stack
+      console.log(`📊 [physics] Stack status: ${settledBlocks.length} settled blocks, top at ${stackTop.toFixed(0)}px, fill: ${(fillRatio * 100).toFixed(0)}%`);
+      window.lastStackCheckLog = Date.now();
+    }
+  }
+
+  // Trigger explosions if stack reaches danger threshold
+  if(fillRatio > DANGER_THRESHOLD || window.fallingBlocks.size > 40){
+    // Stack too high! Start exploding oldest blocks
+    const numToExplode = Math.min(6, Math.floor(window.fallingBlocks.size * 0.25)); // Explode 25% of blocks
+
+    const oldest = sortedByAge.slice(0, numToExplode);
+
+    console.log(`💥 [physics] Stack too high! (${(fillRatio * 100).toFixed(0)}% filled, ${window.fallingBlocks.size} total, ${settledBlocks.length} settled)`);
+    console.log(`   🧨 Exploding ${oldest.length} oldest blocks...`);
+
+    // Stagger explosions for cascading effect
+    oldest.forEach((blockData, index) => {
+      setTimeout(() => {
+        if(window.fallingBlocks.has(blockData.body.id)){
+          explodeBlock(blockData);
+        }
+      }, index * 80); // 80ms delay between each explosion for cascade
+    });
+  }
+}
+
+// Crumble a block into falling chunks (digital decay effect)
+window.crumblingChunks = window.crumblingChunks || []; // Track crumbling fragments
+
+function explodeBlock(blockData){
+  const body = blockData.body;
+  const pos = body.position;
+  const width = body.bounds.max.x - body.bounds.min.x;
+  const height = body.bounds.max.y - body.bounds.min.y;
+
+  console.log(`🧱 [physics] Crumbling ${blockData.displayPath}...`);
+
+  // Get block color
+  const color = body.render.fillStyle;
+
+  // Break into 6-9 chunks (irregular pieces)
+  const numChunks = 6 + Math.floor(Math.random() * 4);
+  const chunkSize = Math.min(width, height) / 3; // Smaller fragments
+
+  for(let i = 0; i < numChunks; i++){
+    // Random position within original block bounds
+    const offsetX = (Math.random() - 0.5) * width * 0.6;
+    const offsetY = (Math.random() - 0.5) * height * 0.6;
+
+    // Random chunk dimensions
+    const chunkW = chunkSize * (0.5 + Math.random() * 0.5);
+    const chunkH = chunkSize * (0.5 + Math.random() * 0.5);
+
+    // Create chunk body
+    const chunk = Matter.Bodies.rectangle(
+      pos.x + offsetX,
+      pos.y + offsetY,
+      chunkW,
+      chunkH,
+      {
+        restitution: 0.3,
+        friction: 0.7,
+        density: 0.001,
+        angle: Math.random() * Math.PI * 2,
+        angularVelocity: (Math.random() - 0.5) * 0.2,
+        render: {
+          fillStyle: color,
+          strokeStyle: color.replace(/[0-9a-f]{2}$/, 'FF'), // Solid stroke
+          lineWidth: 1,
+          opacity: 0.9
+        }
+      }
+    );
+
+    // Small random velocity (gentle crumble, not explosion)
+    Matter.Body.setVelocity(chunk, {
+      x: (Math.random() - 0.5) * 2,
+      y: (Math.random() - 0.2) * 1.5  // Slight downward bias
+    });
+
+    Matter.World.add(window.physicsWorld, chunk);
+
+    // Track chunk for fade-out rendering
+    window.crumblingChunks.push({
+      body: chunk,
+      createdAt: Date.now(),
+      duration: 3500,  // 3.5 seconds to fade
+      language: blockData.language
+    });
+  }
+
+  // Remove original block immediately (it's been replaced by chunks)
+  Matter.World.remove(window.physicsWorld, body);
+  window.fallingBlocks.delete(body.id);
+
+  console.log(`   ✨ Created ${numChunks} crumbling chunks`);
+
+  // Optional: Very subtle gravity disturbance to nearby blocks (no visual effect)
+  for(const [id, otherData] of window.fallingBlocks){
+    if(otherData === blockData) continue;
+
+    const otherBody = otherData.body;
+    const dx = otherBody.position.x - pos.x;
+    const dy = otherBody.position.y - pos.y;
+    const distance = Math.sqrt(dx * dx + dy * dy);
+
+    if(distance < 150 && distance > 0){
+      // Very gentle nudge (barely noticeable)
+      const forceMagnitude = 0.005 * (1 - distance / 150);
+      const forceX = (dx / distance) * forceMagnitude;
+      const forceY = (dy / distance) * forceMagnitude;
+
+      Matter.Body.applyForce(otherBody, otherBody.position, {
+        x: forceX,
+        y: forceY
+      });
+    }
+  }
+}
 
 // Restore Matter.js and initialize physics
 setTimeout(() => {
@@ -7570,11 +7770,42 @@ setTimeout(() => {
 // Expose clear function globally
 window.clearAllFallingBlocks = function(){
   if(!window.physicsWorld) return;
+
+  // Clear falling blocks
   window.fallingBlocks.forEach((data) => {
     Matter.World.remove(window.physicsWorld, data.body);
   });
   window.fallingBlocks.clear();
-  console.log('🧹 [physics] Cleared all blocks');
+
+  // Clear crumbling chunks
+  (window.crumblingChunks || []).forEach(chunk => {
+    Matter.World.remove(window.physicsWorld, chunk.body);
+  });
+  window.crumblingChunks = [];
+
+  console.log('🧹 [physics] Cleared all blocks and chunks');
+};
+
+// Expose explosion trigger for testing/manual cleanup
+window.explodeOldestBlocks = function(count = 5){
+  if(!window.physicsWorld || window.fallingBlocks.size === 0){
+    console.warn('No blocks to explode!');
+    return;
+  }
+
+  const blocks = Array.from(window.fallingBlocks.values());
+  const oldest = blocks
+    .sort((a, b) => a.createdAt - b.createdAt)
+    .slice(0, count);
+
+  console.log(`🧨 [manual] Exploding ${oldest.length} blocks...`);
+  oldest.forEach((blockData, index) => {
+    setTimeout(() => {
+      if(window.fallingBlocks.has(blockData.body.id)){
+        explodeBlock(blockData);
+      }
+    }, index * 100); // Staggered for effect
+  });
 };
 
 // Collision particles system
