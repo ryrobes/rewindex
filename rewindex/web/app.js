@@ -2315,8 +2315,14 @@
       tile.style.left = `${pos.x}px`;
       tile.style.top = `${pos.y}px`;
       // Apply dimensions if specified (treemap mode)
-      if(pos.w) tile.style.width = `${pos.w}px`;
-      if(pos.h) tile.style.height = `${pos.h}px`;
+      if(pos.w){
+        tile.style.width = `${pos.w}px`;
+        tile.setAttribute('data-default-width', pos.w);
+      }
+      if(pos.h){
+        tile.style.height = `${pos.h}px`;
+        tile.setAttribute('data-default-height', pos.h);
+      }
     }
     const title = document.createElement('div');
     title.className = 'title';
@@ -2762,6 +2768,58 @@
     fileLanguages.set(path, data.language);
     tileContent.set(path, data.content || '');
     applyLanguageColor(tile, data.language);
+
+    // Handle binary files differently
+    if(data.is_binary){
+      console.log(`📦 [loadTileContent] Binary file: ${path}`, {
+        has_preview: !!data.preview_base64,
+        binary_type: data.binary_type,
+        size_kb: (data.size_bytes / 1024).toFixed(1)
+      });
+
+      body.innerHTML = ''; // Clear
+
+      // Show preview if available
+      if(data.preview_base64){
+        const previewWidth = data.preview_width || 200;
+        const previewHeight = data.preview_height || 200;
+        const aspectRatio = previewWidth / previewHeight;
+
+        console.log(`🖼️  [loadTileContent] Rendering preview`, {
+          file: path.split('/').pop(),
+          width: previewWidth,
+          height: previewHeight,
+          aspect: aspectRatio.toFixed(2)
+        });
+
+        const img = document.createElement('img');
+        img.src = data.preview_base64;
+        img.style.width = '100%';
+        img.style.height = '100%';
+        img.style.objectFit = 'cover';  // Fill tile, may crop
+        img.style.display = 'block';
+        img.style.backgroundColor = 'rgba(0, 0, 0, 0.2)';
+        body.appendChild(img);
+
+        console.log(`🖼️  [binary] Image fills tile, aspect: ${aspectRatio.toFixed(2)}`);
+
+        // Keep tile same size for now (layout system handles sizing)
+        // Image uses object-fit to fill nicely
+        return; // Done!
+      }
+
+      // No preview - show binary info
+      console.log(`📦 [loadTileContent] No preview, showing info for ${path.split('/').pop()}`);
+      const info = document.createElement('div');
+      info.className = 'binary-tile-info';
+      info.innerHTML = `
+        <div class="binary-type-badge">${(data.binary_type || 'BINARY').toUpperCase()}</div>
+        <div class="binary-size">${(data.size_bytes / 1024).toFixed(1)} KB</div>
+        <div class="binary-hint">Click to download</div>
+      `;
+      body.appendChild(info);
+      return; // Done, skip text rendering
+    }
 
     // Use Prism for syntax highlighting (lightweight, supports 1000s of instances)
     const content = data.content || '';
@@ -5057,17 +5115,10 @@
         console.log(`🔍 [refreshAllTiles] Language filter active: ${currentLanguageFilter} (${filteredResults.length}/${lastSearchResults.length} files)`);
       }
 
-      // Filter out binary files (don't render on canvas, only in results panel)
-      const textFiles = filteredResults.filter(r => !r.is_binary);
-      const binaryFiles = filteredResults.filter(r => r.is_binary);
-
-      if(binaryFiles.length > 0){
-        console.log(`📦 [refreshAllTiles] ${binaryFiles.length} binary files (shown in results only, not on canvas)`);
-      }
-
-      // Use text files for canvas rendering
+      // Include binary files on canvas (now that we can render them!)
+      // Binary toggle controls visibility in results, not canvas
       const maxFiles = 300;
-      const limitedResults = textFiles.slice(0, maxFiles);
+      const limitedResults = filteredResults.slice(0, maxFiles);
       list = limitedResults.map(r => r.file_path);
 
       // Fetch metadata for these specific files

@@ -90,41 +90,95 @@ def _get_binary_type(extension: str) -> str:
 
 
 def _generate_image_preview(path: Path, max_size_kb: int = 50) -> Optional[str]:
-    """Generate base64 thumbnail for small images (<max_size_kb)."""
-    try:
-        import base64
-        from io import BytesIO
+    """Generate base64 thumbnail using ImageMagick's convert command."""
+    import subprocess
+    import base64
+    import tempfile
 
-        # Only process small images
+    try:
+        # Check file size
         size_kb = path.stat().st_size / 1024
-        if size_kb > max_size_kb:
+        if size_kb > max_size_kb * 10:  # Allow larger files with convert (10x limit)
             return None
 
-        # Try to use PIL if available for thumbnail generation
+        # Try ImageMagick convert first (handles images + videos!)
+        try:
+            with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp:
+                tmp_path = tmp.name
+
+            # Use convert to generate 200x200 thumbnail (keep aspect ratio)
+            # Supports: images, PDFs, videos (first frame)
+            result = subprocess.run([
+                'convert',
+                str(path) + '[0]',  # [0] gets first frame for videos/PDFs
+                '-thumbnail', '200x200',  # Max dimensions (maintains aspect)
+                '-quality', '85',
+                '-strip',  # Remove metadata
+                tmp_path
+            ], capture_output=True, timeout=5, check=False)
+
+            if result.returncode == 0:
+                # Get actual dimensions of generated thumbnail
+                size_result = subprocess.run([
+                    'identify',
+                    '-format', '%w %h',
+                    tmp_path
+                ], capture_output=True, timeout=2, check=False)
+
+                thumb_width = 200
+                thumb_height = 200
+                if size_result.returncode == 0:
+                    try:
+                        w, h = size_result.stdout.decode().strip().split()
+                        thumb_width = int(w)
+                        thumb_height = int(h)
+                    except:
+                        pass
+
+                # Read generated thumbnail
+                with open(tmp_path, 'rb') as f:
+                    thumbnail_data = f.read()
+
+                # Cleanup temp file
+                try:
+                    Path(tmp_path).unlink()
+                except:
+                    pass
+
+                # Convert to base64
+                b64 = base64.b64encode(thumbnail_data).decode('utf-8')
+                return {
+                    'data': f"data:image/png;base64,{b64}",
+                    'width': thumb_width,
+                    'height': thumb_height
+                }
+
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            # Convert not available or timed out, fall back
+            pass
+
+        # Fallback to PIL if available
         try:
             from PIL import Image
+            from io import BytesIO
+
+            if size_kb > max_size_kb:
+                return None
+
             img = Image.open(path)
+            img.thumbnail((150, 150))
 
-            # Generate small thumbnail (max 100x100)
-            img.thumbnail((100, 100))
-
-            # Convert to base64
             buffer = BytesIO()
             img.save(buffer, format='PNG')
             b64 = base64.b64encode(buffer.getvalue()).decode('utf-8')
             return f"data:image/png;base64,{b64}"
         except ImportError:
-            # PIL not available, just read and encode small file as-is
-            if size_kb < 20:  # Only for very small images
-                with open(path, 'rb') as f:
-                    b64 = base64.b64encode(f.read()).decode('utf-8')
-                    # Guess mime type
-                    ext = path.suffix.lower()
-                    mime = {'.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
-                            '.gif': 'image/gif', '.webp': 'image/webp'}.get(ext, 'image/png')
-                    return f"data:{mime};base64,{b64}"
-            return None
-    except:
+            pass
+
+        return None
+
+    except Exception as e:
+        # Silent failure for preview generation
         return None
 
 
@@ -424,11 +478,11 @@ def _index_binary_file(
     extension = file_path.suffix
     binary_type = _get_binary_type(extension)
 
-    # Generate preview for small images
-    preview = None
-    if binary_type == 'image':
+    # Generate preview for images/videos
+    preview_data = None
+    if binary_type in ('image', 'video', 'document'):
         max_kb = getattr(cfg.indexing, 'binary_preview_max_kb', 50)
-        preview = _generate_image_preview(file_path, max_size_kb=max_kb)
+        preview_data = _generate_image_preview(file_path, max_size_kb=max_kb)
 
     file_id = f"{project_id}:{rel_path}"
     existing = es.get_doc(files_index, file_id)
@@ -466,8 +520,15 @@ def _index_binary_file(
     }
 
     # Add preview if available (not searchable, just for display)
-    if preview:
-        body["preview_base64"] = preview
+    if preview_data:
+        if isinstance(preview_data, dict):
+            # New format with dimensions
+            body["preview_base64"] = preview_data.get('data')
+            body["preview_width"] = preview_data.get('width')
+            body["preview_height"] = preview_data.get('height')
+        else:
+            # Old format (string only)
+            body["preview_base64"] = preview_data
 
     es.put_doc(files_index, file_id, body)
 

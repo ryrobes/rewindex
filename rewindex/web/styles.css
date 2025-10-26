@@ -2957,3 +2957,37 @@ body.secondary-filter-active .beads-panel-tab {
   60% { transform: scale(0.95); }
   100% { transform: scale(1); }
 }
+
+/* Binary tile info display */
+.binary-tile-info {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  gap: 12px;
+  padding: 20px;
+  color: var(--muted);
+}
+
+.binary-tile-info .binary-type-badge {
+  font-size: 16px;
+  font-weight: 700;
+  padding: 8px 16px;
+  background: rgba(0, 0, 0, 0.4);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--accent);
+}
+
+.binary-tile-info .binary-size {
+  font-size: 14px;
+  font-family: var(--font-mono), monospace;
+  color: var(--text);
+}
+
+.binary-tile-info .binary-hint {
+  font-size: 11px;
+  font-style: italic;
+  opacity: 0.6;
+}
