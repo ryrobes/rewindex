@@ -572,7 +572,7 @@
       query: qEl.value,
       filters: filters,
       options: {
-        limit: 500,
+        limit: 300,
         context_lines: 2,
         highlight: true,
         fuzziness: fuzzyMode ? 'AUTO' : undefined,
@@ -1244,7 +1244,7 @@
         ...(currentAsOfMs ? { as_of_ms: currentAsOfMs } : {})
       },
       options: {
-        limit: 500,
+        limit: 300,
         context_lines: 2,
         highlight: true,
         fuzziness: panel.fuzzyMode ? 'AUTO' : undefined,
@@ -4925,7 +4925,7 @@
       }
 
       // Use search results instead of fetching all files
-      const maxFiles = 500;
+      const maxFiles = 300;
       const limitedResults = filteredResults.slice(0, maxFiles);
       list = limitedResults.map(r => r.file_path);
 
@@ -5660,6 +5660,15 @@
       }
 
       console.log(`📊 [renderCodebaseOverview] Rendering ${stats.length} language stats`);
+
+      // Add wordmark to results header
+      if(resultsHeaderEl){
+        const wordmark = document.createElement('div');
+        wordmark.className = 'rewindex-wordmark';
+        wordmark.textContent = 'REWINDex';
+        resultsHeaderEl.innerHTML = '';
+        resultsHeaderEl.appendChild(wordmark);
+      }
 
       // Calculate totals across all languages
       const totals = stats.reduce((acc, s) => ({

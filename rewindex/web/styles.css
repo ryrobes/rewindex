@@ -442,7 +442,7 @@ body {
   /* background: rgba(9, 12, 15, 0.95); */
   /* background: var(--bg); */
   /* border-bottom: 1px solid var(--border) + '45'; */
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+  /* box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5); */
   /* height: 100px; */
   /* background: var(--bgt); */
   backdrop-filter: blur(12px)brightness(80%);
@@ -962,6 +962,31 @@ body {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
+}
+
+/* REWINDex Wordmark (overview mode) */
+.rewindex-wordmark {
+  font-size: 68px;
+  /* font-weight: 900; */
+  letter-spacing: 2px;
+  margin-top: -30px;
+  opacity: 0.6;
+  /* text-transform: uppercase; */
+  background: linear-gradient(135deg, var(--accent) 0%, var(--text) 50%, var(--accent) 100%);
+  background-size: 200% 200%;
+  background-clip: text;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: wordmarkShimmer 4s ease-in-out infinite;
+  font-family: 'Badeen Display', sans-serif, 'BBH Sans Hegarty';
+  text-align: left;
+  width: 100%;
+  /* font-family: var(--font-mono), 'Fira Code', monospace; */
+}
+
+@keyframes wordmarkShimmer {
+  0%, 100% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
 }
 
 #results {
