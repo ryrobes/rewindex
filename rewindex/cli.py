@@ -114,7 +114,8 @@ def cmd_index_start(args: argparse.Namespace) -> int:
     root = _project_root(Path.cwd())
     cfg = Config.load(root)
     try:
-        res = index_project(root, cfg)
+        # Enable verbose logging for manual index runs
+        res = index_project(root, cfg, verbose=True)
         print(json.dumps(res))
         if args.watch:
             poll_watch(root, cfg, interval_s=1.0)

@@ -144,6 +144,8 @@ class IndexingConfig:
     exclude_patterns: List[str] = field(default_factory=lambda: [*DEFAULT_IGNORE_PATTERNS])
     max_file_size_mb: int = 10
     max_index_size_gb: int = 5
+    index_binaries: bool = False  # Index binary files (metadata only, no content)
+    binary_preview_max_kb: int = 50  # Max image size for base64 preview generation
     watch: IndexingWatch = field(default_factory=IndexingWatch)
     extract: IndexingExtract = field(default_factory=IndexingExtract)
     parallel_workers: int = 1  # sequential by default in MVP

@@ -87,6 +87,7 @@
         <div class="search-toggles">
           <button id="contentToggle" class="toggle-btn active" title="Search file contents" style="font-size: 11px; font-weight: 700; margin-top: -3px;">content</button>
           <button id="nameToggle" class="toggle-btn active" title="Search file names" style="font-size: 11px; font-weight: 700; margin-top: -3px;">name</button>
+          <button id="binaryToggle" class="toggle-btn active" title="Include binary files" style="font-size: 11px; font-weight: 700; margin-top: -3px;">binary</button>
           <button id="partialToggle" class="toggle-btn" title="Partial match"  style="font-size: 20px; margin-top: 3px; font-weight: 700;">*</button>
           <button id="fuzzyToggle" class="toggle-btn" title="Fuzzy search">~</button>
           <button id="deletedToggle" class="toggle-btn" title="Show deleted" style="font-size: 10px;">🗑</button>
@@ -95,6 +96,12 @@
         <div class="filter-input-group">
           <!-- <label class="filter-label">Path:</label> -->
           <input id="pathFilter" class="filter-input" type="text" placeholder="partial path: e.g., repos/rewindex" autocomplete="off" spellcheck="false" />
+          <button id="browseFolders" class="filter-browse-btn" title="Browse indexed folders">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+              <path d="M1 3.5C1 2.67 1.67 2 2.5 2H6L7 4H13.5C14.33 4 15 4.67 15 5.5V12.5C15 13.33 14.33 14 13.5 14H2.5C1.67 14 1 13.33 1 12.5V3.5Z" fill="currentColor" opacity="0.6"/>
+              <path d="M1 5.5C1 4.67 1.67 4 2.5 4H13.5C14.33 4 15 4.67 15 5.5V12.5C15 13.33 14.33 14 13.5 14H2.5C1.67 14 1 13.33 1 12.5V5.5Z" stroke="currentColor" stroke-width="1.5" fill="none"/>
+            </svg>
+          </button>
         </div>
 
         <div class="filter-input-group">

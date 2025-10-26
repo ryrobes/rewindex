@@ -9,8 +9,10 @@
   const clearSearchBtn = document.getElementById('clearSearch');
   const pathFilterInput = document.getElementById('pathFilter');
   const pathExcludeInput = document.getElementById('pathExclude');
+  const browseFoldersBtn = document.getElementById('browseFolders');
   const contentToggleBtn = document.getElementById('contentToggle');
   const nameToggleBtn = document.getElementById('nameToggle');
+  const binaryToggleBtn = document.getElementById('binaryToggle');
   const deletedToggleBtn = document.getElementById('deletedToggle');
   const partialToggleBtn = document.getElementById('partialToggle');
   const fuzzyToggleBtn = document.getElementById('fuzzyToggle');
@@ -73,6 +75,7 @@
   const sizeByBytes = true; // Always use bytes for treemap sizing
   let contentSearchEnabled = true;  // Search file contents (default ON)
   let nameSearchEnabled = true;     // Search file names (default ON)
+  let showBinaries = true;          // Include binary files in results (default ON)
   let fuzzyMode = false;
   let partialMode = false;
   let deletedMode = false;
@@ -601,8 +604,18 @@
     // Hide spinner
     if(spinner) spinner.style.display = 'none';
 
+    // Filter binary files if toggle is off
+    let displayResults = results;
+    if(!showBinaries){
+      displayResults = results.filter(r => !r.is_binary);
+      const filteredCount = results.length - displayResults.length;
+      if(filteredCount > 0){
+        console.log(`📦 [doSearch] Filtered out ${filteredCount} binary files`);
+      }
+    }
+
     // Store search results for results-only mode
-    lastSearchResults = results;
+    lastSearchResults = displayResults;
 
     // Store timeline file paths (base query without time filter)
     // IMPORTANT: Only update timeline paths when NOT time-traveling
@@ -617,12 +630,12 @@
     // RESULTS-ONLY MODE: Rebuild canvas with only search results
     if(resultsOnlyMode){
       await refreshAllTiles(currentAsOfMs);
-      // Render results sidebar (no dimming needed since we only show matches)
-      renderResults(results, res.total||0, true); // Pass true to skip dimming
+      // Render results sidebar (pass both filtered and original counts)
+      renderResults(displayResults, res.total||0, true, results.length); // Pass original count
     }
     // SHOW ALL MODE: Render results and apply dimming to non-matches
     else {
-      renderResults(results, res.total||0, false);
+      renderResults(displayResults, res.total||0, false, results.length);
     }
 
     // Trigger filter panel updates (they need to re-compute based on new primary results)
@@ -664,8 +677,12 @@
     });
   }
 
-  function renderResults(results, total, skipDimming = false){
+  function renderResults(results, total, skipDimming = false, originalCount = null){
     resultsEl.innerHTML = '';
+
+    // Track if binaries were filtered
+    const binaryFiltered = originalCount && originalCount > results.length;
+    const hiddenCount = binaryFiltered ? originalCount - results.length : 0;
 
     // DEBUG: Log raw results BEFORE grouping
     // console.log('🔍 [renderResults] Raw results from API:', results.length);
@@ -769,11 +786,19 @@
       const resultSetCount = results.length;
       const modeInfo = resultsOnlyMode ? ' ' : '';
 
+      let countText;
       if(resultSetCount > fileCount){
-        countDiv.textContent = `${matchCount} matches in ${fileCount} files (${resultSetCount} result sets)${modeInfo}`;
+        countText = `${matchCount} matches in ${fileCount} files (${resultSetCount} result sets)${modeInfo}`;
       } else {
-        countDiv.textContent = `${matchCount} matches in ${fileCount} files${modeInfo}`;
+        countText = `${matchCount} matches in ${fileCount} files${modeInfo}`;
       }
+
+      // Add binary filter note if applicable
+      if(hiddenCount > 0){
+        countText += ` · ${hiddenCount} binary hidden`;
+      }
+
+      countDiv.textContent = countText;
       resultsHeaderEl.appendChild(countDiv);
 
       // Add chevron button to add filter panel
@@ -850,14 +875,40 @@
       const file = document.createElement('div');
       file.className = 'result-file';
       if(fileGroup.deleted) file.classList.add('deleted');
-      file.textContent = fileGroup.file_path;
 
-      // Click file header to focus on file (first result set, first match)
+      // Check if binary file
+      const isBinary = fileGroup.resultSets[0].is_binary;
+      const binaryType = fileGroup.resultSets[0].binary_type;
+
+      if(isBinary){
+        file.classList.add('binary');
+        // Show type badge + filename
+        const badge = document.createElement('span');
+        badge.className = 'binary-type-badge';
+        badge.textContent = (binaryType || 'BIN').toUpperCase();
+        file.appendChild(badge);
+
+        const nameSpan = document.createElement('span');
+        nameSpan.textContent = fileGroup.file_path;
+        file.appendChild(nameSpan);
+      } else {
+        file.textContent = fileGroup.file_path;
+      }
+
+      // Click file header
       file.onclick = ()=> {
         // Clear previous active states
         document.querySelectorAll('.result-file-header.active, .result-match.active').forEach(el => el.classList.remove('active'));
         fileHeader.classList.add('active');
-        focusResult(fileGroup.resultSets[0]);
+
+        if(isBinary){
+          // Binary file: download or preview
+          handleBinaryFileClick(fileGroup.resultSets[0]);
+        } else {
+          // Text file: normal behavior
+          focusResult(fileGroup.resultSets[0]);
+        }
+
         file.scrollIntoView({block:'nearest'});
         // Highlight this file in all filter panels
         highlightFileInAllPanels(fileGroup.file_path, null);
@@ -889,20 +940,17 @@
       const matchesContainer = document.createElement('div');
       matchesContainer.className = 'result-matches';
 
-      // DEBUG: Log what we're rendering
-      // console.log(`📊 [renderResults] File: ${fileGroup.file_path.substring(fileGroup.file_path.lastIndexOf('/') + 1)}`, {
-      //   resultSets: fileGroup.resultSets.length,
-      //   totalMatches: fileGroup.totalMatches
-      // });
+      // Check if there are any actual matches (with line numbers/content)
+      let hasActualMatches = false;
+      fileGroup.resultSets.forEach(resultSet => {
+        const matches = resultSet.matches || [];
+        if(matches.length > 0 && matches.some(m => m.line || m.highlight)){
+          hasActualMatches = true;
+        }
+      });
 
       fileGroup.resultSets.forEach((resultSet, setIdx) => {
         const matches = resultSet.matches || [];
-        const totalOccurrences = matches.reduce((sum, m) => sum + (m.match_count || 1), 0);
-        // console.log(`  └─ Result set ${setIdx + 1}:`, {
-        //   matches: matches.length,
-        //   total_occurrences: totalOccurrences,
-        //   score: resultSet.score_pct || Math.round(resultSet.score || 0)
-        // });
 
         matches.forEach((m, matchIdx)=>{
           const item = document.createElement('div');
@@ -938,7 +986,13 @@
       });
 
       grp.appendChild(fileHeader);
-      grp.appendChild(matchesContainer);
+
+      // Only append matches container if there are actual matches
+      // (Skip for filename-only matches with no content)
+      if(hasActualMatches){
+        grp.appendChild(matchesContainer);
+      }
+
       resultsEl.appendChild(grp);
 
       // Auto-focus first result on initial render
@@ -3791,13 +3845,34 @@
     updateClearBtnVisibility();
   }
 
-  // Path filter input - re-search when changed
+  // Browse folders button
+  if(browseFoldersBtn && pathFilterInput){
+    browseFoldersBtn.onclick = async () => {
+      console.log('📁 [browseFolders] Opening folder browser');
+      const selectedPath = await showFolderBrowser();
+      if(selectedPath){
+        pathFilterInput.value = selectedPath;
+        console.log(`📁 [browseFolders] Selected: ${selectedPath}`);
+        if(qEl.value.trim()){
+          doSearch(); // Apply new path filter to search
+        } else if(resultsOnlyMode){
+          // Empty search: update overview with selected folder
+          renderCodebaseOverview();
+        }
+      }
+    };
+  }
+
+  // Path filter input - re-search or update overview when changed
   if(pathFilterInput){
     pathFilterInput.addEventListener('input', ()=>{
       if(searchTimer) clearTimeout(searchTimer);
       searchTimer = setTimeout(()=> {
         if(qEl.value.trim()){
           doSearch(); // Re-run search with new path filter
+        } else if(resultsOnlyMode){
+          // Empty search: update overview with new filter
+          renderCodebaseOverview();
         }
       }, 300);
     });
@@ -3812,13 +3887,16 @@
     });
   }
 
-  // Path exclude input - re-search when changed
+  // Path exclude input - re-search or update overview when changed
   if(pathExcludeInput){
     pathExcludeInput.addEventListener('input', ()=>{
       if(searchTimer) clearTimeout(searchTimer);
       searchTimer = setTimeout(()=> {
         if(qEl.value.trim()){
           doSearch(); // Re-run search with new exclude filter
+        } else if(resultsOnlyMode){
+          // Empty search: update overview with new filter
+          renderCodebaseOverview();
         }
       }, 300);
     });
@@ -3931,6 +4009,18 @@
       console.log(`🔍 Name search: ${nameSearchEnabled ? 'ON' : 'OFF'}`);
       if(qEl.value.trim()){
         doSearch(); // Re-run search with new field selection
+      }
+    };
+  }
+
+  // Binary files toggle
+  if(binaryToggleBtn){
+    binaryToggleBtn.onclick = ()=>{
+      showBinaries = !showBinaries;
+      binaryToggleBtn.classList.toggle('active', showBinaries);
+      console.log(`📦 Binary files: ${showBinaries ? 'SHOWN' : 'HIDDEN'}`);
+      if(qEl.value.trim()){
+        doSearch(); // Re-run search to apply filter
       }
     };
   }
@@ -4924,9 +5014,17 @@
         console.log(`🔍 [refreshAllTiles] Language filter active: ${currentLanguageFilter} (${filteredResults.length}/${lastSearchResults.length} files)`);
       }
 
-      // Use search results instead of fetching all files
+      // Filter out binary files (don't render on canvas, only in results panel)
+      const textFiles = filteredResults.filter(r => !r.is_binary);
+      const binaryFiles = filteredResults.filter(r => r.is_binary);
+
+      if(binaryFiles.length > 0){
+        console.log(`📦 [refreshAllTiles] ${binaryFiles.length} binary files (shown in results only, not on canvas)`);
+      }
+
+      // Use text files for canvas rendering
       const maxFiles = 300;
-      const limitedResults = filteredResults.slice(0, maxFiles);
+      const limitedResults = textFiles.slice(0, maxFiles);
       list = limitedResults.map(r => r.file_path);
 
       // Fetch metadata for these specific files
@@ -5650,8 +5748,28 @@
 
     console.log('📊 [renderCodebaseOverview] Fetching codebase stats...');
 
+    // Build URL with current path filters
+    let url = '/stats/overview';
+    const params = new URLSearchParams();
+
+    const pathPrefix = pathFilterInput?.value?.trim();
+    if(pathPrefix){
+      params.append('path_prefix', pathPrefix);
+      console.log(`📊 [renderCodebaseOverview] Applying path prefix filter: ${pathPrefix}`);
+    }
+
+    const pathExclude = pathExcludeInput?.value?.trim();
+    if(pathExclude){
+      params.append('exclude_paths', pathExclude);
+      console.log(`📊 [renderCodebaseOverview] Applying exclude filter: ${pathExclude}`);
+    }
+
+    if(params.toString()){
+      url += '?' + params.toString();
+    }
+
     try{
-      const data = await fetchJSON('/stats/overview');
+      const data = await fetchJSON(url);
       const stats = data.stats || [];
 
       if(stats.length === 0){
@@ -5682,13 +5800,21 @@
       const overview = document.createElement('div');
       overview.className = 'codebase-overview';
 
-      // Header
+      // Header with dynamic subtitle
       const header = document.createElement('div');
       header.className = 'overview-header';
-      // header.innerHTML = `
-      //   <h3>Index Overview</h3>
-      //   <div class="overview-subtitle">Click any language to filter</div>
-      // `;
+
+      let subtitle = 'Click any file extension to pre-filter';
+      if(pathPrefix || pathExclude){
+        const filters = [];
+        if(pathPrefix) filters.push(`prefix: ${pathPrefix}`);
+        if(pathExclude) filters.push(`excluding: ${pathExclude}`);
+        subtitle = `Filtered by ${filters.join(', ')}`;
+      }
+
+      header.innerHTML = `
+        <div class="overview-subtitle">${subtitle}</div>
+      `;
       overview.appendChild(header);
 
       // Total summary section
@@ -6307,6 +6433,236 @@
           throw new Error(`Failed to load background after ${maxRetries} attempts`);
         }
       }
+    }
+  }
+
+  function handleBinaryFileClick(fileData){
+    const path = fileData.file_path;
+    const binaryType = fileData.binary_type;
+    const preview = fileData.metadata?.preview_base64 || fileData.preview_base64;
+
+    console.log(`📦 [handleBinaryFile] Clicked binary file:`, {
+      path,
+      type: binaryType,
+      hasPreview: !!preview
+    });
+
+    // If image with preview, show modal
+    if(binaryType === 'image' && preview){
+      showImagePreviewModal(fileData);
+    } else {
+      // Download file
+      const downloadUrl = `/file/download?path=${encodeURIComponent(path)}`;
+      console.log(`📦 [handleBinaryFile] Opening download: ${downloadUrl}`);
+      window.open(downloadUrl, '_blank');
+      showToast(`Downloading ${path.split('/').pop()}`);
+    }
+  }
+
+  function showImagePreviewModal(fileData){
+    const path = fileData.file_path;
+    const preview = fileData.metadata?.preview_base64 || fileData.preview_base64;
+    const fileName = path.split('/').pop();
+
+    // Create modal overlay
+    const modal = document.createElement('div');
+    modal.className = 'binary-preview-modal';
+    modal.innerHTML = `
+      <div class="binary-preview-content">
+        <div class="binary-preview-header">
+          <span>${fileName}</span>
+          <button class="binary-preview-close">×</button>
+        </div>
+        <div class="binary-preview-body">
+          <img src="${preview}" alt="${fileName}" />
+          <div class="binary-preview-info">
+            ${fileData.binary_type?.toUpperCase() || 'IMAGE'} ·
+            ${(fileData.metadata?.size_bytes || 0 / 1024).toFixed(1)} KB
+          </div>
+        </div>
+        <div class="binary-preview-footer">
+          <button class="btn" onclick="window.open('/file/download?path=${encodeURIComponent(path)}', '_blank')">
+            Download Full Size
+          </button>
+        </div>
+      </div>
+    `;
+
+    document.body.appendChild(modal);
+
+    // Close handlers
+    const closeBtn = modal.querySelector('.binary-preview-close');
+    closeBtn.onclick = () => modal.remove();
+    modal.onclick = (e) => {
+      if(e.target === modal) modal.remove();
+    };
+  }
+
+  async function showFolderBrowser(){
+    console.log('📁 [showFolderBrowser] Fetching folder list from index...');
+
+    try {
+      // Get unique folders from dedicated endpoint (faster than fetching all files)
+      const res = await fetchJSON('/folders');
+      const folders = res.folders || [];
+
+      console.log(`📁 [showFolderBrowser] Fetched ${folders.length} unique folders from /folders endpoint`);
+      if(folders.length > 0){
+        console.log(`📁 [showFolderBrowser] Sample folders:`, folders.slice(0, 10));
+      }
+
+      // Build tree structure
+      const tree = buildFolderTree(folders);
+
+      // Show modal
+      return await showFolderTreeModal(tree);
+
+    } catch(e){
+      console.error('[showFolderBrowser] Error:', e);
+      showToast('Failed to load folders');
+      return null;
+    }
+  }
+
+  function buildFolderTree(folders){
+    const root = {};
+
+    folders.forEach(path => {
+      const parts = path.split('/');
+      let node = root;
+
+      parts.forEach((part, idx) => {
+        if(!node[part]){
+          node[part] = {
+            _path: parts.slice(0, idx + 1).join('/'),
+            _children: {}
+          };
+        }
+        node = node[part]._children;
+      });
+    });
+
+    console.log(`📁 [buildFolderTree] Built tree with ${Object.keys(root).length} top-level folders`);
+    console.log(`📁 [buildFolderTree] Top-level keys:`, Object.keys(root).slice(0, 10));
+
+    return root;
+  }
+
+  async function showFolderTreeModal(tree){
+    return new Promise((resolve) => {
+      const modal = document.createElement('div');
+      modal.className = 'folder-browser-modal';
+
+      const content = document.createElement('div');
+      content.className = 'folder-browser-content';
+
+      const header = document.createElement('div');
+      header.className = 'folder-browser-header';
+      header.innerHTML = `
+        <span>Select Folder</span>
+        <button class="folder-browser-close">×</button>
+      `;
+
+      const body = document.createElement('div');
+      body.className = 'folder-browser-body';
+
+      // Render tree
+      renderFolderTreeNodes(tree, body, (selectedPath) => {
+        modal.remove();
+        resolve(selectedPath);
+      });
+
+      const closeBtn = header.querySelector('.folder-browser-close');
+      closeBtn.onclick = () => {
+        modal.remove();
+        resolve(null);
+      };
+
+      modal.onclick = (e) => {
+        if(e.target === modal){
+          modal.remove();
+          resolve(null);
+        }
+      };
+
+      content.appendChild(header);
+      content.appendChild(body);
+      modal.appendChild(content);
+      document.body.appendChild(modal);
+    });
+  }
+
+  function renderFolderTreeNodes(tree, container, onSelect, depth = 0){
+    const entries = Object.entries(tree);
+
+    if(depth === 0){
+      console.log(`📁 [renderFolderTreeNodes] Rendering ${entries.length} root folders`);
+    }
+
+    for(const [name, node] of entries){
+      const hasChildren = node._children && Object.keys(node._children).length > 0;
+
+      // Main item row
+      const item = document.createElement('div');
+      item.className = 'folder-tree-item';
+      item.style.paddingLeft = `${depth * 16 + 8}px`;
+
+      // Expand/collapse chevron
+      const chevron = document.createElement('span');
+      chevron.className = 'folder-tree-chevron';
+      chevron.textContent = hasChildren ? '▶' : ' ';
+      chevron.style.opacity = hasChildren ? '1' : '0';
+
+      // Folder icon (SVG)
+      const icon = document.createElement('span');
+      icon.className = 'folder-tree-icon';
+      icon.innerHTML = `
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+          <path d="M1 3.5C1 2.67 1.67 2 2.5 2H6L7 4H13.5C14.33 4 15 4.67 15 5.5V12.5C15 13.33 14.33 14 13.5 14H2.5C1.67 14 1 13.33 1 12.5V3.5Z" fill="currentColor" opacity="0.4"/>
+          <path d="M1 5.5C1 4.67 1.67 4 2.5 4H13.5C14.33 4 15 4.67 15 5.5V12.5C15 13.33 14.33 14 13.5 14H2.5C1.67 14 1 13.33 1 12.5V5.5Z" stroke="currentColor" stroke-width="1.5" fill="none"/>
+        </svg>
+      `;
+
+      // Folder name
+      const label = document.createElement('span');
+      label.className = 'folder-tree-label';
+      label.textContent = name;
+
+      item.appendChild(chevron);
+      item.appendChild(icon);
+      item.appendChild(label);
+      container.appendChild(item);
+
+      // Children container (initially hidden)
+      let childrenContainer = null;
+      let isExpanded = false;
+
+      if(hasChildren){
+        childrenContainer = document.createElement('div');
+        childrenContainer.className = 'folder-tree-children';
+        childrenContainer.style.display = 'none';
+        container.appendChild(childrenContainer);
+
+        // Render children (but hidden)
+        renderFolderTreeNodes(node._children, childrenContainer, onSelect, depth + 1);
+      }
+
+      // Click chevron to expand/collapse
+      chevron.onclick = (e) => {
+        e.stopPropagation();
+        if(!hasChildren) return;
+
+        isExpanded = !isExpanded;
+        chevron.textContent = isExpanded ? '▼' : '▶';
+        childrenContainer.style.display = isExpanded ? 'block' : 'none';
+      };
+
+      // Click folder name to select
+      label.onclick = (e) => {
+        e.stopPropagation();
+        console.log(`📁 Selected folder: ${node._path}`);
+        onSelect(node._path);
+      };
     }
   }
 

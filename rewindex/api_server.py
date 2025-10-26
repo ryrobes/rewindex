@@ -262,6 +262,41 @@ class RewindexHandler(BaseHTTPRequestHandler):
             self.do_static(web_dir, rel)
             return
 
+        # File download endpoint (serves actual file from filesystem)
+        if path_only == "/file/download":
+            p = qs.get("path", [None])[0]
+            if not p:
+                self.send_error(400, "Missing path param")
+                return
+            try:
+                # Security: validate path is within project root
+                abs_path = (root / p).resolve()
+                if not abs_path.is_relative_to(root):
+                    self.send_error(403, "Path outside project root")
+                    return
+
+                if not abs_path.exists():
+                    self.send_error(404, "File not found")
+                    return
+
+                # Determine MIME type
+                import mimetypes
+                mime_type = mimetypes.guess_type(abs_path)[0] or 'application/octet-stream'
+
+                # Read and serve file
+                with open(abs_path, 'rb') as f:
+                    data = f.read()
+
+                self.send_response(200)
+                self.send_header("Content-Type", mime_type)
+                self.send_header("Content-Length", str(len(data)))
+                self.send_header("Content-Disposition", f'inline; filename="{abs_path.name}"')
+                self.end_headers()
+                self.wfile.write(data)
+            except Exception as e:
+                self.send_error(500, f"Error serving file: {e}")
+            return
+
         # File endpoints
         if path_only == "/file":
             p = qs.get("path", [None])[0]
@@ -329,10 +364,39 @@ class RewindexHandler(BaseHTTPRequestHandler):
                 es = ESClient(cfg.elasticsearch.host)
                 idx = ensure_indices(es, cfg.resolved_index_prefix())
 
+                # Get optional filters from query params
+                path_prefix = qs.get("path_prefix", [None])[0]
+                exclude_paths = qs.get("exclude_paths", [None])[0]
+
+                # Build query with filters
+                query_filters = [{"term": {"is_current": True}}]  # Only current files
+
+                if path_prefix:
+                    query_filters.append({"prefix": {"file_path": path_prefix}})
+
+                if exclude_paths:
+                    # Parse comma-separated exclude patterns
+                    patterns = [p.strip() for p in exclude_paths.split(',') if p.strip()]
+                    must_not = []
+                    for pattern in patterns:
+                        es_pattern = pattern.replace('**', '*')
+                        if not es_pattern.startswith('*'):
+                            es_pattern = '*' + es_pattern
+                        if not es_pattern.endswith('*'):
+                            es_pattern = es_pattern + '*'
+                        must_not.append({"wildcard": {"file_path": es_pattern}})
+                else:
+                    must_not = []
+
                 # Multi-level aggregation: by language, get file count, version count, total size
                 body = {
                     "size": 0,
-                    "query": {"term": {"is_current": True}},  # Only current files
+                    "query": {
+                        "bool": {
+                            "filter": query_filters,
+                            "must_not": must_not
+                        }
+                    },
                     "aggs": {
                         "by_language": {
                             "terms": {
@@ -492,6 +556,42 @@ class RewindexHandler(BaseHTTPRequestHandler):
                     doc_id = f"{cfg.project.id}:{p}"
                     doc = es.get_doc(idx["files_index"], doc_id)
                     _json_response(self, 200, (doc or {}).get("_source", {}))
+            except (URLError, HTTPError):
+                _json_response(self, 503, {"error": f"Cannot reach Elasticsearch at {cfg.elasticsearch.host}"})
+            return
+
+        if path_only == "/folders":
+            # Get unique folder paths using aggregation (much faster for folder browser)
+            try:
+                es = ESClient(cfg.elasticsearch.host)
+                idx = ensure_indices(es, cfg.resolved_index_prefix())
+
+                # Use script to extract folder paths from file_path
+                body = {
+                    "size": 0,
+                    "query": {"term": {"is_current": True}},
+                    "aggs": {
+                        "file_paths": {
+                            "terms": {
+                                "field": "file_path",
+                                "size": 50000  # Get up to 50k unique file paths
+                            }
+                        }
+                    }
+                }
+
+                res = es.search(idx["files_index"], body)
+                buckets = res.get("aggregations", {}).get("file_paths", {}).get("buckets", [])
+                file_paths = [b["key"] for b in buckets]
+
+                # Extract unique folders from paths
+                folders = set()
+                for path in file_paths:
+                    parts = path.split('/')
+                    for i in range(1, len(parts)):
+                        folders.add('/'.join(parts[:i]))
+
+                _json_response(self, 200, {"folders": sorted(folders)})
             except (URLError, HTTPError):
                 _json_response(self, 503, {"error": f"Cannot reach Elasticsearch at {cfg.elasticsearch.host}"})
             return

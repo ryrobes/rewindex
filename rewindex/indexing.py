@@ -67,6 +67,67 @@ def _should_index_file(path: Path, rel_path: str, cfg: Config) -> bool:
     return True
 
 
+def _get_binary_type(extension: str) -> str:
+    """Categorize binary file type by extension."""
+    ext = extension.lower()
+
+    images = {'.png', '.jpg', '.jpeg', '.gif', '.bmp', '.webp', '.ico', '.svg'}
+    videos = {'.mp4', '.avi', '.mkv', '.mov', '.wmv', '.flv', '.webm', '.m4v'}
+    audio = {'.mp3', '.wav', '.flac', '.ogg', '.m4a', '.aac', '.wma'}
+    archives = {'.zip', '.tar', '.gz', '.bz2', '.7z', '.rar', '.tgz'}
+    documents = {'.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx'}
+    fonts = {'.ttf', '.otf', '.woff', '.woff2', '.eot'}
+    executables = {'.exe', '.dll', '.so', '.dylib', '.bin'}
+
+    if ext in images: return 'image'
+    if ext in videos: return 'video'
+    if ext in audio: return 'audio'
+    if ext in archives: return 'archive'
+    if ext in documents: return 'document'
+    if ext in fonts: return 'font'
+    if ext in executables: return 'executable'
+    return 'binary'
+
+
+def _generate_image_preview(path: Path, max_size_kb: int = 50) -> Optional[str]:
+    """Generate base64 thumbnail for small images (<max_size_kb)."""
+    try:
+        import base64
+        from io import BytesIO
+
+        # Only process small images
+        size_kb = path.stat().st_size / 1024
+        if size_kb > max_size_kb:
+            return None
+
+        # Try to use PIL if available for thumbnail generation
+        try:
+            from PIL import Image
+            img = Image.open(path)
+
+            # Generate small thumbnail (max 100x100)
+            img.thumbnail((100, 100))
+
+            # Convert to base64
+            buffer = BytesIO()
+            img.save(buffer, format='PNG')
+            b64 = base64.b64encode(buffer.getvalue()).decode('utf-8')
+            return f"data:image/png;base64,{b64}"
+        except ImportError:
+            # PIL not available, just read and encode small file as-is
+            if size_kb < 20:  # Only for very small images
+                with open(path, 'rb') as f:
+                    b64 = base64.b64encode(f.read()).decode('utf-8')
+                    # Guess mime type
+                    ext = path.suffix.lower()
+                    mime = {'.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
+                            '.gif': 'image/gif', '.webp': 'image/webp'}.get(ext, 'image/png')
+                    return f"data:{mime};base64,{b64}"
+            return None
+    except:
+        return None
+
+
 def _is_binary_file(path: Path) -> bool:
     """Detect if a file is binary by checking for null bytes in the first 8KB."""
     try:
@@ -108,7 +169,7 @@ def iter_candidate_files(root: Path, cfg: Config) -> Iterator[Path]:
                 yield p
 
 
-def index_project(project_root: Path, cfg: Config, on_event: Optional[Callable[[Dict[str, object]], None]] = None) -> Dict[str, int]:
+def index_project(project_root: Path, cfg: Config, on_event: Optional[Callable[[Dict[str, object]], None]] = None, verbose: bool = False) -> Dict[str, int]:
     extractor = SimpleExtractor()
     root = project_root.resolve()
 
@@ -123,12 +184,36 @@ def index_project(project_root: Path, cfg: Config, on_event: Optional[Callable[[
     present_paths: set[str] = set()
     new_hash_to_path: dict[str, str] = {}
     project_id = cfg.project.id
+
+    if verbose:
+        print(f"[rewindex] Scanning files in {project_root}...")
+        print(f"[rewindex] Binary indexing: {'ENABLED' if cfg.indexing.index_binaries else 'DISABLED'}")
+
     for path in iter_candidate_files(root, cfg):
         rel_path = str(path.relative_to(root))
         present_paths.add(rel_path)
+
+        # Check if binary first
+        is_binary = _is_binary_file(path)
+        if is_binary and not cfg.indexing.index_binaries:
+            skipped += 1
+            continue
+
+        if is_binary:
+            # Index binary file
+            binary_type = _get_binary_type(path.suffix)
+            if verbose:
+                print(f"  [BINARY-{binary_type.upper()}] {rel_path}")
+            # This will be handled by index_single_file in the future
+            # For now in bulk indexing, skip
+            skipped += 1
+            continue
+
         content = _read_text(path)
         if content is None:
             skipped += 1
+            if verbose:
+                print(f"  [SKIPPED] {rel_path} (could not read)")
             continue
         h = sha256_hex(content.encode("utf-8", errors="ignore"))
         stat = path.stat()
@@ -165,6 +250,8 @@ def index_project(project_root: Path, cfg: Config, on_event: Optional[Callable[[
 
         if prev_hash is None:
             added += 1
+            if verbose:
+                print(f"  [ADDED] {rel_path} ({lang})")
             if on_event is not None:
                 try:
                     on_event({"action": "added", "file_path": rel_path, "language": lang})
@@ -172,6 +259,8 @@ def index_project(project_root: Path, cfg: Config, on_event: Optional[Callable[[
                     pass
         elif prev_hash != h:
             updated += 1
+            if verbose:
+                print(f"  [UPDATED] {rel_path} ({lang})")
             if on_event is not None:
                 try:
                     on_event({"action": "updated", "file_path": rel_path, "language": lang})
@@ -313,6 +402,113 @@ def poll_watch(
         print(f"[rewindex] Watcher loop exiting (ran {iteration} iterations).")
 
 
+def _index_binary_file(
+    file_path: Path,
+    rel_path: str,
+    stat,
+    project_root: Path,
+    cfg: Config,
+    es: ESClient,
+    files_index: str,
+    versions_index: str,
+    project_id: str,
+    on_event: Optional[Callable[[Dict[str, object]], None]] = None,
+) -> str:
+    """Index a binary file with metadata only (no content)."""
+    # Compute hash of binary content for version tracking
+    with open(file_path, 'rb') as f:
+        binary_data = f.read()
+    h = sha256_hex(binary_data)
+
+    # Detect binary type
+    extension = file_path.suffix
+    binary_type = _get_binary_type(extension)
+
+    # Generate preview for small images
+    preview = None
+    if binary_type == 'image':
+        max_kb = getattr(cfg.indexing, 'binary_preview_max_kb', 50)
+        preview = _generate_image_preview(file_path, max_size_kb=max_kb)
+
+    file_id = f"{project_id}:{rel_path}"
+    existing = es.get_doc(files_index, file_id)
+    prev_hash = None
+    if existing and existing.get("_source"):
+        prev_hash = existing["_source"].get("content_hash")
+
+    # Skip if unchanged
+    if prev_hash == h:
+        return "skipped"
+
+    body = {
+        "content": "",  # Empty for binaries!
+        "file_path": rel_path,
+        "file_name": file_path.name,
+        "extension": extension,
+        "language": f"binary-{binary_type}",
+        "size_bytes": stat.st_size,
+        "line_count": 0,
+        "last_modified": int(stat.st_mtime * 1000),
+        "indexed_at": int(time.time() * 1000),
+        "content_hash": h,
+        "previous_hash": prev_hash,
+        "is_current": True,
+        "is_binary": True,
+        "binary_type": binary_type,
+        "project_id": project_id,
+        "project_root": str(project_root),
+        # No metadata extraction for binaries
+        "imports": [],
+        "defined_functions": [],
+        "defined_classes": [],
+        "todos": [],
+        "has_tests": False,
+    }
+
+    # Add preview if available (not searchable, just for display)
+    if preview:
+        body["preview_base64"] = preview
+
+    es.put_doc(files_index, file_id, body)
+
+    action = "added" if prev_hash is None else "updated"
+    if on_event:
+        try:
+            on_event({"action": action, "file_path": rel_path, "language": f"binary-{binary_type}", "is_binary": True})
+        except Exception:
+            pass
+
+    # Version tracking for binaries (hash only, no content)
+    if prev_hash != h:
+        version_doc = {
+            "file_path": rel_path,
+            "content_hash": h,
+            "previous_hash": prev_hash,
+            "created_at": int(time.time() * 1000),
+            "is_current": True,
+            "content": "",  # Empty for binaries
+            "language": f"binary-{binary_type}",
+            "project_id": project_id,
+            "is_binary": True,
+            "binary_type": binary_type,
+            "size_bytes": stat.st_size,
+        }
+        es.put_doc(versions_index, h, version_doc)
+
+        # Mark old version as not current
+        if prev_hash:
+            try:
+                old_ver = es.get_doc(versions_index, prev_hash)
+                if old_ver and old_ver.get("_source"):
+                    old_src = old_ver["_source"]
+                    old_src["is_current"] = False
+                    es.put_doc(versions_index, prev_hash, old_src)
+            except:
+                pass
+
+    return action
+
+
 def index_single_file(
     file_path: Path,
     project_root: Path,
@@ -356,13 +552,25 @@ def index_single_file(
                     pass
         return "skipped"
 
-    # Read and index file
+    stat = file_path.stat()
+
+    # Check if binary BEFORE trying to read as text
+    is_binary = _is_binary_file(file_path)
+    index_binaries = getattr(cfg.indexing, 'index_binaries', False)
+
+    if is_binary:
+        if not index_binaries:
+            return "skipped"
+
+        # Index binary file (metadata only)
+        return _index_binary_file(file_path, rel_path, stat, project_root, cfg, es, files_index, versions_index, project_id, on_event)
+
+    # Read and index text file
     content = _read_text(file_path)
     if content is None:
         return "skipped"
 
     h = sha256_hex(content.encode("utf-8", errors="ignore"))
-    stat = file_path.stat()
     lang = detect_language(file_path)
     metas = extractor.extract_metadata(content, lang)
 
