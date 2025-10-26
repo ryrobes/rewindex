@@ -706,6 +706,226 @@ def watch(
             print("[rewindex] Watchdog observer stopped cleanly")
 
 
+def purge_ignored_files(
+    project_root: Path,
+    cfg: Config,
+    dry_run: bool = False,
+    skip_confirm: bool = False,
+) -> Dict[str, int]:
+    """
+    Remove all indexed files that match current .gitignore/.rewindexignore patterns.
+
+    This is useful after updating ignore files to clean up already-indexed files.
+
+    Args:
+        project_root: Project root directory
+        cfg: Configuration with current ignore patterns
+        dry_run: If True, only report what would be deleted without deleting
+
+    Returns:
+        Dict with counts: {"files_deleted": N, "versions_deleted": N}
+    """
+    from .es import ESClient, ensure_indices
+    import time
+    import json
+
+    print(f"[rewindex] {'DRY RUN: ' if dry_run else ''}Purging files matching ignore patterns...")
+    print(f"[rewindex] Exclude patterns: {len(cfg.indexing.exclude_patterns)} total")
+    print(f"[rewindex] Project root: {project_root}")
+    print(f"[rewindex] Project ID: {cfg.project.id}")
+
+    es = ESClient(cfg.elasticsearch.host)
+    idx = ensure_indices(es, cfg.resolved_index_prefix())
+
+    print(f"[rewindex] Files index: {idx['files_index']}")
+    print(f"[rewindex] Versions index: {idx['versions_index']}")
+
+    # Check total count in index first
+    try:
+        total_count = es.count(idx['files_index'])
+        print(f"[rewindex] Total documents in files index: {total_count}")
+    except:
+        print(f"[rewindex] Could not get index count")
+
+    # Query all files from this project using scroll API (no 10k limit)
+    print("[rewindex] Fetching all indexed files (using scroll API)...")
+    all_file_paths = []
+    to_delete = []
+
+    # Use scroll API to iterate through all documents
+    from urllib.request import Request, urlopen
+    import urllib.parse
+
+    scroll_batch_size = 5000
+    scroll_time = "2m"
+
+    # Initial search with scroll parameter
+    initial_body = {
+        "query": {"bool": {"must": [{"term": {"project_id": cfg.project.id}}]}},
+        "size": scroll_batch_size,
+        "_source": ["file_path"],
+    }
+
+    try:
+        # First request with scroll
+        url = es._url(f"{idx['files_index']}/_search?scroll={scroll_time}")
+        req = Request(url, method='POST')
+        req.add_header('Content-Type', 'application/json')
+        data = json.dumps(initial_body).encode('utf-8')
+
+        with urlopen(req, data, timeout=30) as resp:
+            res = json.loads(resp.read().decode('utf-8'))
+
+        scroll_id = res.get("_scroll_id")
+        hits = res.get("hits", {}).get("hits", [])
+        total = res.get("hits", {}).get("total", {}).get("value", 0)
+
+        print(f"  Initial scroll: {len(hits)} hits (total: {total})")
+
+        # Process all batches
+        batch_num = 0
+        while hits:
+            batch_num += 1
+
+            for h in hits:
+                src = h.get("_source", {})
+                path = src.get("file_path")
+
+                if path:
+                    all_file_paths.append(path)
+                    # Check if path matches any ignore pattern
+                    if _match_any(cfg.indexing.exclude_patterns, path):
+                        to_delete.append(path)
+                        # Log first few matches
+                        if len(to_delete) <= 5:
+                            print(f"    ✓ Will delete: {path}")
+
+            # Continue scrolling
+            if scroll_id:
+                scroll_body = {"scroll": scroll_time, "scroll_id": scroll_id}
+                url = es._url("_search/scroll")
+                req = Request(url, method='POST')
+                req.add_header('Content-Type', 'application/json')
+                data = json.dumps(scroll_body).encode('utf-8')
+
+                with urlopen(req, data, timeout=30) as resp:
+                    res = json.loads(resp.read().decode('utf-8'))
+
+                scroll_id = res.get("_scroll_id")
+                hits = res.get("hits", {}).get("hits", [])
+
+                if batch_num % 5 == 0:  # Log every 5 batches
+                    print(f"  Batch {batch_num}: {len(all_file_paths)} files scanned, {len(to_delete)} to delete")
+            else:
+                break
+
+        # Clear scroll context
+        if scroll_id:
+            try:
+                url = es._url("_search/scroll")
+                req = Request(url, method='DELETE')
+                req.add_header('Content-Type', 'application/json')
+                data = json.dumps({"scroll_id": scroll_id}).encode('utf-8')
+                urlopen(req, data, timeout=10)
+            except:
+                pass
+
+        print(f"  Completed scroll: {batch_num} batches processed")
+
+    except Exception as e:
+        print(f"[rewindex] Error during scroll: {e}")
+        import traceback
+        traceback.print_exc()
+
+    print(f"\n[rewindex] Scanned {len(all_file_paths)} indexed files")
+    print(f"[rewindex] Found {len(to_delete)} files matching ignore patterns\n")
+
+    if len(to_delete) == 0:
+        print("[rewindex] Nothing to purge!")
+        return {"files_deleted": 0, "versions_deleted": 0}
+
+    # Show sample of what will be deleted
+    print("Sample files to be purged:")
+    for path in to_delete[:20]:
+        print(f"  - {path}")
+    if len(to_delete) > 20:
+        print(f"  ... and {len(to_delete) - 20} more")
+
+    if dry_run:
+        print(f"\n[rewindex] DRY RUN: Would delete {len(to_delete)} files")
+        return {"files_deleted": 0, "versions_deleted": 0}
+
+    # Confirm deletion (unless --yes or non-interactive)
+    import sys
+    if not skip_confirm and sys.stdout.isatty():
+        print(f"\n⚠️  This will permanently delete {len(to_delete)} files from the index!")
+        response = input("Continue? (yes/no): ")
+        if response.lower() not in ['yes', 'y']:
+            print("[rewindex] Aborted")
+            return {"files_deleted": 0, "versions_deleted": 0}
+
+    # Delete files in batches
+    print("\n[rewindex] Deleting files...")
+    files_deleted = 0
+    versions_deleted = 0
+    errors = []
+
+    for i, path in enumerate(to_delete):
+        if (i + 1) % 100 == 0:
+            print(f"  Progress: {i + 1}/{len(to_delete)} files...")
+
+        # Delete from files_index using delete_by_query
+        files_body = {
+            "query": {"bool": {"must": [
+                {"term": {"file_path": path}},
+                {"term": {"project_id": cfg.project.id}}
+            ]}}
+        }
+        try:
+            from .es import _json_request
+            url = es._url(f"{idx['files_index']}/_delete_by_query")
+            del_result = _json_request("POST", url, files_body)
+            files_deleted += del_result.get("deleted", 0)
+            if i < 5 and del_result.get("deleted", 0) == 0:
+                errors.append(f"File {path}: 0 deleted (might not exist)")
+        except Exception as e:
+            if i < 5:
+                errors.append(f"File {path}: {str(e)}")
+
+        # Delete all versions from versions_index
+        versions_body = {
+            "query": {"bool": {"must": [
+                {"term": {"file_path": path}},
+                {"term": {"project_id": cfg.project.id}}
+            ]}}
+        }
+        try:
+            from .es import _json_request
+            url = es._url(f"{idx['versions_index']}/_delete_by_query")
+            del_result = _json_request("POST", url, versions_body)
+            versions_deleted += del_result.get("deleted", 0)
+        except Exception as e:
+            if i < 5:
+                errors.append(f"Versions for {path}: {str(e)}")
+
+    # Show errors if any
+    if errors:
+        print("\n[rewindex] Sample errors:")
+        for err in errors[:10]:
+            print(f"  {err}")
+
+    # Refresh indices
+    print("\n[rewindex] Refreshing indices...")
+    es.refresh(idx["files_index"])
+    es.refresh(idx["versions_index"])
+
+    print(f"\n✅ Purge complete!")
+    print(f"   Files deleted: {files_deleted}")
+    print(f"   Versions deleted: {versions_deleted}")
+
+    return {"files_deleted": files_deleted, "versions_deleted": versions_deleted}
+
+
 def _mark_missing_as_deleted(
     es: ESClient,
     files_index: str,

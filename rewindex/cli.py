@@ -94,6 +94,22 @@ def cmd_index_init(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_purge_ignored(args: argparse.Namespace) -> int:
+    """Remove indexed files matching current ignore patterns."""
+    from .indexing import purge_ignored_files
+
+    root = find_project_root(Path.cwd())
+    cfg = Config.load(root)
+
+    try:
+        # Pass --yes flag to skip confirmation
+        result = purge_ignored_files(root, cfg, dry_run=args.dry_run, skip_confirm=args.yes)
+        return 0
+    except Exception as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+
 def cmd_index_start(args: argparse.Namespace) -> int:
     root = _project_root(Path.cwd())
     cfg = Config.load(root)
@@ -987,6 +1003,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     sp_status = sub_index.add_parser("status", help="Show indexing status")
     sp_status.set_defaults(func=cmd_index_status)
+
+    # purge-ignored (cleanup utility)
+    sp_purge = sub.add_parser("purge-ignored", help="Remove indexed files matching current ignore patterns")
+    sp_purge.add_argument("--dry-run", action="store_true", help="Show what would be deleted without deleting")
+    sp_purge.add_argument("--yes", action="store_true", help="Skip confirmation prompt")
+    sp_purge.set_defaults(func=cmd_purge_ignored)
 
     # search
     sp_search = sub.add_parser("search", help="Basic search")
