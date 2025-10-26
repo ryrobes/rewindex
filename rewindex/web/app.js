@@ -530,6 +530,10 @@
         for(const [, el] of folders){ el.remove(); } folders.clear();
 
         // Show codebase overview stats in empty state (instead of blank message)
+        // Show physics canvas for falling files in overview mode
+        const pCanvas = document.getElementById('physicsCanvas');
+        if(pCanvas) pCanvas.style.display = 'block';
+
         renderCodebaseOverview();
         return;
       }
@@ -625,6 +629,13 @@
       console.log(`🕐 [doSearch] Updated timeline file paths: ${timelineFilePaths.length} files (base query)`);
     } else {
       console.log(`🕐 [doSearch] Keeping timeline file paths: ${timelineFilePaths.length} files (time-traveling, not updating)`);
+    }
+
+    // Hide physics canvas and clear blocks when showing search results
+    const pCanvas = document.getElementById('physicsCanvas');
+    if(pCanvas) pCanvas.style.display = 'none';
+    if(typeof window.clearAllFallingBlocks === 'function'){
+      window.clearAllFallingBlocks();
     }
 
     // RESULTS-ONLY MODE: Rebuild canvas with only search results
@@ -2525,6 +2536,15 @@
       return 'rgba(92, 106, 114, 0.4)'; // Muted gray for unknown
     }
 
+    // Handle binary languages (binary-image, binary-pdf, etc.)
+    if(language.startsWith('binary-')){
+      const baseLang = language.replace('binary-', '');
+      // Use base language if we have it, otherwise generate for full name
+      if(languageColors[baseLang]){
+        return languageColors[baseLang];
+      }
+    }
+
     // If we've already assigned a color, return it
     if(languageColors[language]){
       return languageColors[language];
@@ -2536,6 +2556,10 @@
     languageColors[language] = color;
     return color;
   }
+
+  // Expose to global scope for physics blocks
+  window.getLanguageColor = getLanguageColor;
+  window.languageColors = languageColors;
 
   function applyLanguageColor(tile, language){
     if(!tile) return;
@@ -5834,6 +5858,15 @@
       `;
       overview.appendChild(header);
 
+      // Store previous totals for comparison
+      const prevTotals = window.overviewPrevTotals || {};
+      window.overviewPrevTotals = {
+        files: totals.files,
+        versions: totals.versions,
+        bytes: totals.bytes,
+        lines: totals.lines
+      };
+
       // Total summary section
       const summary = document.createElement('div');
       summary.className = 'overview-summary';
@@ -7188,6 +7221,7 @@ window.spawnFallingFileBlock = function(fileData){
 
   const { file_path, language, action } = fileData;
 
+
   // Use full path, not just filename
   const displayPath = file_path;
 
@@ -7203,9 +7237,20 @@ window.spawnFallingFileBlock = function(fileData){
   const width = Math.min(600, Math.max(150, displayPath.length * charWidth + padding));
   const height = 60;  // Taller to fit action + path
 
-  // Use existing language color system
-  const color = (typeof getLanguageColor === 'function' ? getLanguageColor(language) : null) || '#39bae699';
 
+  // IMPORTANT: Physics code runs in global scope (window.spawnFallingFileBlock)
+  // Need to access getLanguageColor from main app context 
+  let color = '#39bae6';
+
+  // Access function from window/global scope
+  const colorFn = window.getLanguageColor || getLanguageColor;
+  if(typeof colorFn === 'function'){
+    color = colorFn(language) + '70';
+  } else {
+    console.warn('🎨 [physics] getLanguageColor not accessible from physics context');
+  }
+
+  console.log(`🎨 [physics] Language: "${language}", Color: ${color}, languageColors size:`, Object.keys(window.languageColors || {}).length);
 
   const block = Matter.Bodies.rectangle(x, y, width, height, {
     restitution: 0.4,
@@ -7262,3 +7307,13 @@ setTimeout(() => {
   }
 }, 1500);
 
+
+// Expose clear function globally
+window.clearAllFallingBlocks = function(){
+  if(!window.physicsWorld) return;
+  window.fallingBlocks.forEach((data) => {
+    Matter.World.remove(window.physicsWorld, data.body);
+  });
+  window.fallingBlocks.clear();
+  console.log('🧹 [physics] Cleared all blocks');
+};
