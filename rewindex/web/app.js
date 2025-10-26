@@ -90,6 +90,7 @@
   let currentTerminalColors = null; // Current terminal ANSI colors (for spectrum palette)
   let recentUpdates = []; // Track recent file updates [{path, action, timestamp}]
   const MAX_RECENT_UPDATES = 20;
+  let overviewRefreshTimer = null; // Debounce timer for overview refresh on file updates
   let overlayEditor = null; // Monaco editor instance for overlay
   let overlayEditorPath = null; // Current file path being edited
   let diffEditor = null; // Monaco diff editor instance
@@ -542,8 +543,7 @@
       // Clear tracking sets
       if(window._dimmedTiles) window._dimmedTiles.clear();
       if(window._dimmedFolders) window._dimmedFolders.clear();
-      // Show recent updates when search is empty
-      renderRecentUpdates();
+      // Don't show recent updates - falling blocks show updates visually!
       return;
     }
 
@@ -4499,20 +4499,27 @@
             recentUpdates.pop();
           }
 
-          // Re-render recent updates if search is empty
-          if(!qEl.value.trim() && !followCliMode){
-            renderRecentUpdates();
+          // Don't render recent updates panel - falling blocks show updates!
+          // Instead, refresh overview and timeline (with debounce)
+          if(!qEl.value.trim() && resultsOnlyMode && !followCliMode){
+            if(overviewRefreshTimer) clearTimeout(overviewRefreshTimer);
+            overviewRefreshTimer = setTimeout(() => {
+              console.log('🔄 [file update] Refreshing overview + timeline');
+              renderCodebaseOverview();
+              refreshTimeline();
+            }, 2000); // 2 second debounce
           }
 
           //showToast(`${action === 'added' ? 'Indexed' : 'Updated'}: ${path}`);
           refreshTileContent(path);
           flashTile(path, 'update');
 
-          // Update timeline and trigger ripple after redraw completes
-          refreshTimeline().then(() => {
-            // Wait a tiny bit for DOM to settle after SVG redraw
-            setTimeout(() => triggerTimelineRipple(), 50);
-          }).catch(() => {}); // Ignore errors
+          // Update timeline and trigger ripple (for non-overview modes)
+          if(qEl.value.trim()){
+            refreshTimeline().then(() => {
+              setTimeout(() => triggerTimelineRipple(), 50);
+            }).catch(() => {});
+          }
 
           // Update language bar when files change
           updateLanguageBar();
@@ -5859,6 +5866,16 @@
         </div>
       `;
       overview.appendChild(summary);
+      // Trigger bump animation on all summary values
+      setTimeout(() => {
+        const values = summary.querySelectorAll('.summary-value');
+        values.forEach((val, idx) => {
+          setTimeout(() => {
+            val.classList.add('bump');
+            setTimeout(() => val.classList.remove('bump'), 400);
+          }, idx * 50);
+        });
+      }, 100);
 
       // Stats grid
       const grid = document.createElement('div');
@@ -7064,6 +7081,7 @@ if(typeof window.physicsEngine === 'undefined'){
   window.fallingFilesEnabled = true;
 }
 
+
 function initPhysicsSimulation(){
   if(typeof Matter === 'undefined'){
     console.warn('⚠️  Matter.js not loaded, falling files disabled');
@@ -7074,6 +7092,7 @@ function initPhysicsSimulation(){
 
   const pCanvas = document.getElementById('physicsCanvas');
   if(!pCanvas) return;
+
 
   // Create engine  
   window.physicsEngine = Matter.Engine.create({
@@ -7141,7 +7160,7 @@ function initPhysicsSimulation(){
       ctx.lineWidth = 2;
 
 
-      ctx.strokeText(action, 0, -12);
+      //ctx.strokeText(action, 0, -12);
       ctx.fillText(action, 0, -12);
 
       // Draw file path at bottom
@@ -7152,7 +7171,7 @@ function initPhysicsSimulation(){
       ctx.fontWeight = '500';
       ctx.lineWidth = 4;
 
-      ctx.strokeText(text, 0, 4);
+      //ctx.strokeText(text, 0, 4);
       ctx.fillText(text, 0, 4);
 
       ctx.restore();
@@ -7185,7 +7204,8 @@ window.spawnFallingFileBlock = function(fileData){
   const height = 60;  // Taller to fit action + path
 
   // Use existing language color system
-  const color = (typeof getLanguageColor === 'function' ? getLanguageColor(language) : null) || '#39bae6';
+  const color = (typeof getLanguageColor === 'function' ? getLanguageColor(language) : null) || '#39bae699';
+
 
   const block = Matter.Bodies.rectangle(x, y, width, height, {
     restitution: 0.4,
@@ -7195,8 +7215,8 @@ window.spawnFallingFileBlock = function(fileData){
     angularVelocity: (Math.random() - 0.5) * 0.15,
     render: {
       fillStyle: color,
-      //strokeStyle: 'rgba(255, 255, 255, 0.3)',
-      lineWidth: 2,
+      //strokeStyle: 'rgba(255, 255, 255, 0.3)', 
+      //lineWidth: 2,
       opacity: 0.85
     }
   });
