@@ -162,6 +162,11 @@ def simple_search_es(
                 "deleted",
                 "deleted_at",
                 "is_current",
+                "is_binary",
+                "binary_type",
+                "preview_base64",
+                "preview_width",
+                "preview_height",
             ]
         },
     }

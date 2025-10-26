@@ -2801,11 +2801,8 @@
         img.style.backgroundColor = 'rgba(0, 0, 0, 0.2)';
         body.appendChild(img);
 
-        console.log(`🖼️  [binary] Image fills tile, aspect: ${aspectRatio.toFixed(2)}`);
-
-        // Keep tile same size for now (layout system handles sizing)
-        // Image uses object-fit to fill nicely
-        return; // Done!
+        console.log(`🖼️  [binary] Image rendered, aspect: ${aspectRatio.toFixed(2)}, tile already sized by layout`);
+        return; // Done! Layout system already sized the tile
       }
 
       // No preview - show binary info
@@ -3502,10 +3499,7 @@
   }
 
   function layoutSimpleGrid(paths){
-    // SIMPLE GRID LAYOUT for Results-Only mode - no folders, no complex packing
-    // Just arrange tiles in a regular grid for maximum performance
-
-    // Clear old containers/positions
+    // SIMPLE GRID LAYOUT - uniform tiles, square-ish grid
     for(const [, el] of folders){ el.remove(); }
     folders.clear(); filePos.clear(); fileFolder.clear();
 
@@ -3514,31 +3508,19 @@
     const gap = 40;
     const startX = 40;
     const startY = 40;
-
-    // Calculate optimal columns for square-ish grid
     const n = paths.length;
     const tilesPerRow = Math.ceil(Math.sqrt(n));
 
-    console.log(`📐 [layoutSimpleGrid] ${n} tiles → ${tilesPerRow} cols per row (square grid)`);
+    console.log(`📐 [layoutSimpleGrid] ${n} tiles → ${tilesPerRow} cols, uniform size`);
 
-    let x = startX;
-    let y = startY;
-    let col = 0;
-
+    let x = startX, y = startY, col = 0;
     for(const p of paths){
-      // Store position
-      filePos.set(p, { x: x, y: y });
-      fileFolder.set(p, ''); // No folder hierarchy
-
-      // Move to next position
+      filePos.set(p, { x, y });
+      fileFolder.set(p, '');
       col++;
       if(col >= tilesPerRow){
-        // Start new row
-        col = 0;
-        x = startX;
-        y += tileH + gap;
+        col = 0; x = startX; y += tileH + gap;
       } else {
-        // Next column
         x += tileW + gap;
       }
     }
@@ -5127,7 +5109,10 @@
         file_path: r.file_path,
         size_bytes: (r.metadata && r.metadata.size_bytes) || 0,
         line_count: (r.metadata && r.metadata.line_count) || 1,
-        language: r.language || 'text'
+        language: r.language || 'text',
+        is_binary: r.is_binary || false,
+        preview_width: (r.metadata && r.metadata.preview_width) || null,
+        preview_height: (r.metadata && r.metadata.preview_height) || null
       }));
     }
     // SHOW ALL MODE: Fetch all files from index
@@ -5147,14 +5132,17 @@
       return;
     }
 
-    // Store file metadata for treemap mode
+    // Store file metadata for treemap mode AND binary sizing
     fileMeta.clear();
     fileLanguages.clear(); // Clear before repopulating
     for(const f of filesWithMeta){
       if(f.file_path){
         fileMeta.set(f.file_path, {
           size_bytes: f.size_bytes || 0,
-          line_count: f.line_count || 1
+          line_count: f.line_count || 1,
+          is_binary: f.is_binary || false,
+          preview_width: f.preview_width || null,
+          preview_height: f.preview_height || null
         });
         // Populate language data early for language bar
         if(f.language){
