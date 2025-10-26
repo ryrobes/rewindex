@@ -3765,10 +3765,30 @@
 
   // Clear search button
   if(clearSearchBtn){
-    clearSearchBtn.onclick = ()=>{
-      qEl.value = '';
-      doSearch(); // Will show recent updates since query is empty
+    // Show/hide based on input value
+    const updateClearBtnVisibility = () => {
+      if(qEl.value.trim()){
+        clearSearchBtn.style.opacity = '0.6';
+        clearSearchBtn.style.pointerEvents = 'all';
+      } else {
+        clearSearchBtn.style.opacity = '0';
+        clearSearchBtn.style.pointerEvents = 'none';
+      }
     };
+
+    // Update on input
+    qEl.addEventListener('input', updateClearBtnVisibility);
+
+    // Click handler
+    clearSearchBtn.onclick = ()=>{
+      console.log('🧹 [clearSearch] Clearing search');
+      qEl.value = '';
+      updateClearBtnVisibility();
+      doSearch(); // Triggers overview rendering in results-only mode
+    };
+
+    // Initial state
+    updateClearBtnVisibility();
   }
 
   // Path filter input - re-search when changed

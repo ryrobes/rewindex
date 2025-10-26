@@ -472,7 +472,7 @@ body {
 .search-input {
   width: 300px;
   /* width: calc(35vw - 160px); */
-  padding: 8px 14px;
+  padding: 8px 32px 8px 14px;
   height: 30px;
   font-size: 13px;
   color: var(--text);
@@ -480,7 +480,7 @@ body {
   border: 1px solid var(--border);
   border-radius: 8px;
   outline: none;
-  
+
   transition: all 0.2s ease;
   box-sizing: border-box;
 }
@@ -503,7 +503,7 @@ body {
 
 .clear-btn {
   position: absolute;
-  left: 6px;
+  right: 8px;
   top: 50%;
   transform: translateY(-50%);
   background: none;
@@ -512,14 +512,20 @@ body {
   font-size: 18px;
   line-height: 1;
   cursor: pointer;
-  padding: 4px;
-  opacity: 0.5;
+  padding: 4px 6px;
+  opacity: 0;
+  pointer-events: none;
   transition: all 0.2s ease;
+  z-index: 10;
+  border-radius: 3px;
 }
 
+/* Clear button visibility handled by JavaScript */
+
 .clear-btn:hover {
-  color: var(--text);
+  color: var(--accent);
   opacity: 1;
+  background: rgba(255, 255, 255, 0.05);
 }
 
 /* Search toggles: *, ~, 🗑 - icon only, no background */
