@@ -72,8 +72,24 @@ def poll_theme_changes(watcher: OmarchyThemeWatcher, interval_s: float, stop_eve
             if watcher.check_for_changes():
                 theme = watcher.get_current_theme()
                 if theme:
-                    BROKER.publish({"type": "theme-update", "theme": theme})
-                    logger.info(" Theme update broadcasted to clients")
+                    # Transform background path to API URL (same as /api/system-theme endpoint)
+                    bg_url = None
+                    if theme.get('background') and theme.get('background_hash'):
+                        bg_url = f"/api/system-theme/background?v={theme['background_hash']}"
+                    elif theme.get('background'):
+                        bg_url = "/api/system-theme/background"
+
+                    # Build theme payload with background_url instead of raw path
+                    theme_payload = {
+                        'colors': theme.get('colors', {}),
+                        'syntax': theme.get('syntax', {}),
+                        'font': theme.get('font', {}),
+                        'background_url': bg_url,
+                        'terminal_colors': theme.get('terminal_colors')
+                    }
+
+                    BROKER.publish({"type": "theme-update", "theme": theme_payload})
+                    logger.info(f" Theme update broadcasted to clients (bg_url: {bg_url})")
         except Exception as e:
             logger.error(f"Error polling theme: {e}")
 
@@ -737,6 +753,8 @@ class RewindexHandler(BaseHTTPRequestHandler):
                         fuzziness=options.get("fuzziness"),
                         partial=options.get("partial", False),
                         show_deleted=options.get("show_deleted", False),
+                        search_content=options.get("search_content", True),
+                        search_name=options.get("search_name", True),
                     ),
                 )
                 _json_response(self, 200, res)

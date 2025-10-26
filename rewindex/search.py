@@ -30,6 +30,8 @@ class SearchOptions:
     fuzziness: Optional[str] = None
     partial: bool = False  # Apply wildcard suffix for prefix matching
     show_deleted: bool = False  # Show deleted files in results
+    search_content: bool = True  # Search file contents
+    search_name: bool = True  # Search file names
 
 
 def simple_search_es(
@@ -58,15 +60,23 @@ def simple_search_es(
         # Check if query contains wildcards
         has_wildcards = '*' in search_query or '?' in search_query
 
+        # Build search fields based on options
+        search_fields = []
+        if options.search_content:
+            search_fields.append("content^1")
+        if options.search_name:
+            search_fields.append("file_name.text^2")
+
+        # Fallback: if both disabled somehow, search content
+        if not search_fields:
+            search_fields = ["content^1"]
+
         if has_wildcards:
             # Use query_string for wildcard support
             must.append({
                 "query_string": {
                     "query": search_query,
-                    "fields": [
-                        "content^1",
-                        "file_name.text^2"
-                    ],
+                    "fields": search_fields,
                     "default_operator": "AND"
                 }
             })
@@ -75,10 +85,7 @@ def simple_search_es(
             match_query = {
                 "query": search_query,
                 "operator": "and",
-                "fields": [
-                    "content^1",
-                    "file_name.text^2"
-                ],
+                "fields": search_fields,
             }
             # Add fuzziness if specified in options
             if options.fuzziness:

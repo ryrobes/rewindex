@@ -9,6 +9,8 @@
   const clearSearchBtn = document.getElementById('clearSearch');
   const pathFilterInput = document.getElementById('pathFilter');
   const pathExcludeInput = document.getElementById('pathExclude');
+  const contentToggleBtn = document.getElementById('contentToggle');
+  const nameToggleBtn = document.getElementById('nameToggle');
   const deletedToggleBtn = document.getElementById('deletedToggle');
   const partialToggleBtn = document.getElementById('partialToggle');
   const fuzzyToggleBtn = document.getElementById('fuzzyToggle');
@@ -69,6 +71,8 @@
   let treemapMode = false;
   let treemapFoldersMode = false;
   const sizeByBytes = true; // Always use bytes for treemap sizing
+  let contentSearchEnabled = true;  // Search file contents (default ON)
+  let nameSearchEnabled = true;     // Search file names (default ON)
   let fuzzyMode = false;
   let partialMode = false;
   let deletedMode = false;
@@ -573,7 +577,9 @@
         highlight: true,
         fuzziness: fuzzyMode ? 'AUTO' : undefined,
         partial: partialMode,
-        show_deleted: deletedMode
+        show_deleted: deletedMode,
+        search_content: contentSearchEnabled,
+        search_name: nameSearchEnabled
       }
     };
 
@@ -3875,6 +3881,40 @@
   });
   // ==================== End Input History Handlers ====================
 
+  // Content search toggle
+  if(contentToggleBtn){
+    contentToggleBtn.onclick = ()=>{
+      // Prevent disabling if name is also disabled (need at least one)
+      if(contentSearchEnabled && !nameSearchEnabled){
+        showToast('At least one search field must be enabled');
+        return;
+      }
+      contentSearchEnabled = !contentSearchEnabled;
+      contentToggleBtn.classList.toggle('active', contentSearchEnabled);
+      console.log(`🔍 Content search: ${contentSearchEnabled ? 'ON' : 'OFF'}`);
+      if(qEl.value.trim()){
+        doSearch(); // Re-run search with new field selection
+      }
+    };
+  }
+
+  // Name search toggle
+  if(nameToggleBtn){
+    nameToggleBtn.onclick = ()=>{
+      // Prevent disabling if content is also disabled (need at least one)
+      if(nameSearchEnabled && !contentSearchEnabled){
+        showToast('At least one search field must be enabled');
+        return;
+      }
+      nameSearchEnabled = !nameSearchEnabled;
+      nameToggleBtn.classList.toggle('active', nameSearchEnabled);
+      console.log(`🔍 Name search: ${nameSearchEnabled ? 'ON' : 'OFF'}`);
+      if(qEl.value.trim()){
+        doSearch(); // Re-run search with new field selection
+      }
+    };
+  }
+
   // Deleted files toggle
   if(deletedToggleBtn){
     deletedToggleBtn.onclick = ()=>{
@@ -4305,9 +4345,18 @@
         const data = JSON.parse(ev.data || '{}');
         const theme = data.theme || {};
         console.log(' [theme] Received theme update via SSE:', theme);
+        console.log(' [theme] background_url from SSE:', theme.background_url);
+        console.log(' [theme] background (raw path) from SSE:', theme.background);
 
         if(systemThemeEnabled && theme.colors){
-          applySystemTheme(theme.colors, theme.syntax || {}, theme.font || {}, theme.background_url || theme.background, theme.terminal_colors);
+          // ONLY use background_url (API endpoint), NEVER raw filesystem path
+          const bgUrl = theme.background_url || null;
+          if(theme.background && !theme.background_url){
+            console.error(' [theme] ERROR: Received raw filesystem path instead of API URL!');
+            console.error('   Raw path:', theme.background);
+            console.error('   This will cause 404 errors. Server needs to send background_url.');
+          }
+          applySystemTheme(theme.colors, theme.syntax || {}, theme.font || {}, bgUrl, theme.terminal_colors);
         }
       }catch(e){
         console.error(' [theme] Error processing theme update:', e);
@@ -5473,35 +5522,47 @@
     }
   }
 
-  function updateLanguageBar(){
-    if(!languageBarEl || !languageLegendEl) return;
+  function updateLanguageBar(overrideStats = null, skipLegend = false){
+    if(!languageBarEl) return;
+    if(!skipLegend && !languageLegendEl) return;
 
-    // Count languages from current file set
-    const counts = {};
+    let counts = {};
     let total = 0;
-    for(const [path, lang] of fileLanguages){
-      if(lang && lang !== 'unknown' && lang !== 'plaintext'){
-        counts[lang] = (counts[lang] || 0) + 1;
-        total++;
-      }
-    }
 
-    console.log('📊 [updateLanguageBar]', {
-      totalFiles: fileLanguages.size,
-      countedFiles: total,
-      languages: Object.keys(counts)
-    });
+    if(overrideStats){
+      // Use provided stats (overview mode)
+      overrideStats.forEach(s => {
+        counts[s.language] = s.file_count;
+      });
+      total = overrideStats.reduce((sum, s) => sum + s.file_count, 0);
+      console.log('📊 [updateLanguageBar] Overview mode:', {
+        languages: Object.keys(counts).length,
+        totalFiles: total
+      });
+    } else {
+      // Count languages from current file set (search mode)
+      for(const [path, lang] of fileLanguages){
+        if(lang && lang !== 'unknown' && lang !== 'plaintext'){
+          counts[lang] = (counts[lang] || 0) + 1;
+          total++;
+        }
+      }
+      console.log('📊 [updateLanguageBar] Search mode:', {
+        totalFiles: fileLanguages.size,
+        countedFiles: total,
+        languages: Object.keys(counts)
+      });
+    }
 
     // If no languages, clear and return
     if(total === 0){
       languageBarEl.innerHTML = '';
-      languageLegendEl.innerHTML = '';
+      if(!skipLegend && languageLegendEl) languageLegendEl.innerHTML = '';
       return;
     }
 
-    // Sort by count descending and reverse
-    const sorted = Object.entries(counts).sort((a, b) => b[1] - a[1]); //.reverse();
-    
+    // Sort by count descending
+    const sorted = Object.entries(counts).sort((a, b) => b[1] - a[1]);
 
     // Render stacked bar
     languageBarEl.innerHTML = '';
@@ -5515,41 +5576,48 @@
       languageBarEl.appendChild(segment);
     });
 
+    // Skip legend in overview mode
+    if(skipLegend){
+      return;
+    }
+
     // Render legend (clickable to filter by language)
-    languageLegendEl.innerHTML = '';
-    sorted.forEach(([lang, count]) => {
-      const item = document.createElement('div');
-      item.className = 'language-legend-item';
+    if(languageLegendEl){
+      languageLegendEl.innerHTML = '';
+      sorted.forEach(([lang, count]) => {
+        const item = document.createElement('div');
+        item.className = 'language-legend-item';
 
-      const dot = document.createElement('div');
-      dot.className = 'language-legend-dot';
-      dot.style.backgroundColor = getLanguageColor(lang);
+        const dot = document.createElement('div');
+        dot.className = 'language-legend-dot';
+        dot.style.backgroundColor = getLanguageColor(lang);
 
-      const label = document.createElement('span');
-      label.className = 'language-legend-label';
-      label.textContent = lang;
+        const label = document.createElement('span');
+        label.className = 'language-legend-label';
+        label.textContent = lang;
 
-      const countSpan = document.createElement('span');
-      countSpan.className = 'language-legend-count';
-      countSpan.textContent = `(${count})`;
+        const countSpan = document.createElement('span');
+        countSpan.className = 'language-legend-count';
+        countSpan.textContent = `(${count})`;
 
-      // Make clickable to filter by this language
-      item.style.cursor = 'pointer';
-      item.title = `Click to filter by ${lang} files`;
-      item.onclick = () => {
-        filterByLanguage(lang);
-      };
+        // Make clickable to filter by this language
+        item.style.cursor = 'pointer';
+        item.title = `Click to filter by ${lang} files`;
+        item.onclick = () => {
+          filterByLanguage(lang);
+        };
 
-      // Highlight if currently filtered by this language
-      if(currentLanguageFilter === lang){
-        item.classList.add('active');
-      }
+        // Highlight if currently filtered by this language
+        if(currentLanguageFilter === lang){
+          item.classList.add('active');
+        }
 
-      item.appendChild(dot);
-      item.appendChild(label);
-      item.appendChild(countSpan);
-      languageLegendEl.appendChild(item);
-    });
+        item.appendChild(dot);
+        item.appendChild(label);
+        item.appendChild(countSpan);
+        languageLegendEl.appendChild(item);
+      });
+    }
   }
 
   // Filter files by language (called when clicking language legend)
@@ -5693,7 +5761,10 @@
       resultsEl.innerHTML = '';
       resultsEl.appendChild(overview);
 
-      console.log('✅ [renderCodebaseOverview] Rendered stats grid');
+      // Update language bar with overview stats (no legend)
+      updateLanguageBar(stats, true);
+
+      console.log('✅ [renderCodebaseOverview] Rendered stats grid + language bar');
     }catch(e){
       console.error('[renderCodebaseOverview] Error:', e);
       resultsEl.innerHTML = '<div class="results-count" style="color: #888;">Error loading stats</div>';
@@ -6119,17 +6190,14 @@
       applySyntaxTheme(syntaxColors, colors);
     }
 
-    // Apply wallpaper background to workspace with dimming overlay
-    // Add delay to allow file system to finish copying/moving the background file
+    // Apply wallpaper background to workspace with retry and smooth transition
     if(backgroundUrl){
-      console.log(' [theme] Setting workspace wallpaper (with 500ms delay):', backgroundUrl);
-      setTimeout(() => {
-        workspace.style.backgroundImage = `linear-gradient(rgba(0, 0, 0, 0.7), rgba(0, 0, 0, 0.7)), url('${backgroundUrl}')`;
-        workspace.style.backgroundSize = 'cover';
-        workspace.style.backgroundPosition = 'center';
-        workspace.style.backgroundRepeat = 'no-repeat';
-        workspace.style.backgroundAttachment = 'fixed';
-      }, 500);
+      console.log('🖼️  [theme] Loading new wallpaper:', backgroundUrl);
+      loadBackgroundWithRetry(backgroundUrl).then(() => {
+        console.log('✅ [theme] Wallpaper loaded successfully');
+      }).catch(e => {
+        console.warn('⚠️  [theme] Failed to load wallpaper after retries:', e);
+      });
     }
 
     // Regenerate language colors with new theme gradient
@@ -6141,6 +6209,76 @@
     updateLanguageBar(); // Refresh language bar with new colors
 
     showToast(' System theme applied');
+  }
+
+  async function loadBackgroundWithRetry(url, maxRetries = 5){
+    console.log(`🖼️  [loadBackground] Attempting to load: ${url}`);
+
+    // Try to load the image with retries
+    for(let attempt = 0; attempt < maxRetries; attempt++){
+      try {
+        // Wait before attempting (exponential backoff)
+        if(attempt > 0){
+          const delay = Math.min(1000 * Math.pow(2, attempt - 1), 5000); // 1s, 2s, 4s, 5s, 5s
+          console.log(`🖼️  [loadBackground] Retry ${attempt + 1}/${maxRetries} in ${delay}ms...`);
+          await new Promise(resolve => setTimeout(resolve, delay));
+        }
+
+        // Preload image to check if it's available
+        const img = new Image();
+
+        await new Promise((resolve, reject) => {
+          const timeout = setTimeout(() => {
+            reject(new Error('Image load timeout'));
+          }, 3000);
+
+          img.onload = () => {
+            clearTimeout(timeout);
+            console.log(`✅ [loadBackground] Image loaded successfully on attempt ${attempt + 1}`);
+            resolve();
+          };
+
+          img.onerror = () => {
+            clearTimeout(timeout);
+            reject(new Error('Image failed to load (404 or network error)'));
+          };
+
+          img.src = url;
+        });
+
+        // Image loaded successfully - apply it with smooth transition
+        const oldBackground = workspace.style.backgroundImage;
+
+        // Fade out old background
+        workspace.style.transition = 'opacity 0.3s ease';
+        workspace.style.opacity = '0.3';
+
+        setTimeout(() => {
+          // Apply new background
+          workspace.style.backgroundImage = `linear-gradient(rgba(0, 0, 0, 0.7), rgba(0, 0, 0, 0.7)), url('${url}')`;
+          workspace.style.backgroundSize = 'cover';
+          workspace.style.backgroundPosition = 'center';
+          workspace.style.backgroundRepeat = 'no-repeat';
+          workspace.style.backgroundAttachment = 'fixed';
+
+          // Fade in new background
+          workspace.style.opacity = '1';
+
+          // Remove transition after animation
+          setTimeout(() => {
+            workspace.style.transition = '';
+          }, 300);
+        }, 300);
+
+        return; // Success!
+
+      } catch(e){
+        console.warn(`⚠️  [loadBackground] Attempt ${attempt + 1} failed:`, e.message);
+        if(attempt === maxRetries - 1){
+          throw new Error(`Failed to load background after ${maxRetries} attempts`);
+        }
+      }
+    }
   }
 
   function applySystemFont(font){
