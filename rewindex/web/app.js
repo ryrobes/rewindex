@@ -7386,12 +7386,39 @@ function initPhysicsSimulation(){
   Matter.Runner.run(window.physicsRunner, window.physicsEngine);
   Matter.Render.run(window.physicsRender);
 
-  // Listen for block-to-block collisions
+  // Track active collisions for crush particle emission
+  window.activeCollisions = new Map(); // blockId -> [{otherBlockId, contactPoint}]
+
+  // Listen for block-to-block collisions (track for crush particles)
   Matter.Events.on(window.physicsEngine, 'collisionStart', (event) => {
-    //console.log('💥 [physics] Collision event:', event.pairs.length, 'pairs');
     event.pairs.forEach(pair => {
       const bodyA = pair.bodyA;
       const bodyB = pair.bodyB;
+
+      // Track collision if either block is at risk (for crush particles)
+      const dataA = window.fallingBlocks.get(bodyA.id);
+      const dataB = window.fallingBlocks.get(bodyB.id);
+
+      if(dataA && dataB){
+        const contactPoint = pair.collision.supports[0];
+
+        // Store collision for both blocks
+        if(!window.activeCollisions.has(bodyA.id)){
+          window.activeCollisions.set(bodyA.id, []);
+        }
+        if(!window.activeCollisions.has(bodyB.id)){
+          window.activeCollisions.set(bodyB.id, []);
+        }
+
+        window.activeCollisions.get(bodyA.id).push({
+          otherId: bodyB.id,
+          point: contactPoint
+        });
+        window.activeCollisions.get(bodyB.id).push({
+          otherId: bodyA.id,
+          point: contactPoint
+        });
+      }
 
       // Only particles for block-to-block collisions (not walls/ground)
       const isBlockA = window.fallingBlocks.has(bodyA.id);
@@ -7437,40 +7464,51 @@ function initPhysicsSimulation(){
       ctx.translate(body.position.x, body.position.y);
       ctx.rotate(body.angle);
 
-      // Fade out if exploding
-      if(data.exploding){
-        const age = Date.now() - data.explodedAt;
-        const fadeProgress = Math.min(1, age / 1500);
-        ctx.globalAlpha = 1 - fadeProgress;
-      }
+      // No fade-out - blocks stay solid until removed
+      // (exploding blocks are removed instantly when they crumble)
 
       // Distortion ripple for blocks at risk (countdown effect)
-      if(data.atRisk && !data.exploding){
+      if(data.atRisk && data.markedForCrumble){
+        const timeLeft = data.crumbleAt - Date.now();
+        const countdownProgress = 1 - (timeLeft / 6000); // 0->1 over 6 seconds
+
+        // Intensify distortion as countdown progresses
+        const intensity = 0.05 + countdownProgress * 0.1; // Start subtle, get more violent
         const pulseTime = Date.now() % 1200;
         const pulseProgress = pulseTime / 1200;
 
-        // Wave distortion - scale pulses in and out
-        const distortAmount = Math.sin(pulseProgress * Math.PI * 2) * 0.08; // ±8% scale
+        // Wave distortion - scale pulses in and out (faster as countdown progresses)
+        const distortAmount = Math.sin(pulseProgress * Math.PI * 2 * (1 + countdownProgress)) * intensity;
         const scaleX = 1 + distortAmount;
-        const scaleY = 1 - distortAmount * 0.5; // Opposite direction for wave effect
+        const scaleY = 1 - distortAmount * 0.5;
 
         ctx.scale(scaleX, scaleY);
 
-        // Subtle red tint on countdown
-        ctx.globalAlpha = 0.9 + Math.sin(pulseProgress * Math.PI * 4) * 0.1;
-        body.render.fillStyle = body.render.fillStyle.replace(/[0-9a-f]{2}$/, 'A0'); // More opaque
+        // Pulsing opacity gets more aggressive
+        const alphaPulse = Math.sin(pulseProgress * Math.PI * 4) * (0.05 + countdownProgress * 0.15);
+        ctx.globalAlpha = 0.95 + alphaPulse;
       }
 
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
 
-      // Draw action badge at top
-      const action = (data.action || 'updated').toUpperCase();
-      ctx.fillStyle = data.atRisk ? 'rgba(255, 100, 100, 0.5)' : 'rgba(255, 255, 255, 0.3)';
-      ctx.font = '13px monospace';
-      ctx.fontWeight = '400';
-      ctx.lineWidth = 2;
-      ctx.fillText(action, 0, -12);
+      // Draw countdown timer if marked for crumbling
+      if(data.markedForCrumble){
+        const timeLeft = Math.max(0, data.crumbleAt - Date.now());
+        const seconds = (timeLeft / 1000).toFixed(1);
+
+        // Draw countdown at top
+        ctx.fillStyle = 'rgba(255, 80, 80, 0.9)';
+        ctx.font = 'bold 16px monospace';
+        ctx.fillText(`⏱ ${seconds}s`, 0, -18);
+      } else {
+        // Draw action badge at top (normal blocks)
+        const action = (data.action || 'updated').toUpperCase();
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.3)';
+        ctx.font = '13px monospace';
+        ctx.fontWeight = '400';
+        ctx.fillText(action, 0, -12);
+      }
 
       // Draw file path at bottom
       const text = data.displayPath || data.fileName || data.path;
@@ -7482,24 +7520,142 @@ function initPhysicsSimulation(){
       ctx.restore();
     });
 
-    // Render crumbling chunks with fade-out (no text, just colored rectangles)
-    const now = Date.now();
+    // Emit particles from at-risk blocks (pressure effects) 
+    const now = Date.now(); 
+    window.lastCrushParticleEmit = window.lastCrushParticleEmit || 0;
+    window.lastCrackParticleEmit = window.lastCrackParticleEmit || 0;
+
+    // Emit crush particles at contact points every 200ms
+    if(now - window.lastCrushParticleEmit > 200){
+      window.fallingBlocks.forEach((data) => {
+        if(data.atRisk && !data.exploding){
+          const collisions = window.activeCollisions.get(data.body.id) || [];
+
+          // Emit dust from contact points (being crushed!)
+          if(collisions.length > 0){
+            collisions.forEach(collision => {
+              // Randomly emit (40% chance per contact for intermittent effect)
+              if(Math.random() < 0.4){
+                emitCrushParticle(collision.point.x, collision.point.y, data.language);
+              }
+            });
+          }
+        }
+      });
+
+      // Clear old collision data (fresh collisions tracked each frame)
+      window.activeCollisions.clear();
+      window.lastCrushParticleEmit = now;
+    }
+
+    // Emit cracking particles from block edges every 150ms (pieces breaking off)
+    if(now - window.lastCrackParticleEmit > 150){
+      window.fallingBlocks.forEach((data) => {
+        if(data.atRisk && data.markedForCrumble){
+          const timeLeft = data.crumbleAt - now;
+          const countdownProgress = 1 - (timeLeft / 6000); // 0->1 as countdown progresses
+
+          // Emission rate increases as block approaches crumbling
+          const emissionChance = 0.2 + countdownProgress * 0.5; // 20% -> 70% over countdown
+
+          // Randomly emit from edges (more frequent as countdown progresses)
+          if(Math.random() < emissionChance){
+            const body = data.body;
+            const bounds = body.bounds;
+
+            // Pick a random edge point (favor bottom/sides where pressure is)
+            const edge = Math.floor(Math.random() * 4);
+            let px, py;
+
+            switch(edge){
+              case 0: // Top edge (less common)
+                px = bounds.min.x + Math.random() * (bounds.max.x - bounds.min.x);
+                py = bounds.min.y;
+                break;
+              case 1: // Right edge
+                px = bounds.max.x;
+                py = bounds.min.y + Math.random() * (bounds.max.y - bounds.min.y);
+                break;
+              case 2: // Bottom edge (most common - being crushed from below)
+                px = bounds.min.x + Math.random() * (bounds.max.x - bounds.min.x);
+                py = bounds.max.y;
+                break;
+              case 3: // Left edge
+                px = bounds.min.x;
+                py = bounds.min.y + Math.random() * (bounds.max.y - bounds.min.y);
+                break;
+            }
+
+            emitCrackParticle(px, py, data.language);
+          }
+        }
+      });
+      window.lastCrackParticleEmit = now;
+    }
+
+    // Update and cleanup crumbling chunks (keep solid until removal)
     window.crumblingChunks = (window.crumblingChunks || []).filter(chunkData => {
       const age = now - chunkData.createdAt;
+
+      // Remove completely after duration
       if(age > chunkData.duration){
-        // Remove from physics world when fully faded
-        Matter.World.remove(window.physicsWorld, chunkData.body);
-        return false;
+        // CRITICAL: Remove from physics world immediately
+        try {
+          Matter.World.remove(window.physicsWorld, chunkData.body);
+        } catch(e){
+          // Already removed, ignore
+        }
+        return false; // Remove from tracking array
       }
 
-      // Fade out over duration
+      // Keep full opacity until very end (no ghosting)
       const fadeProgress = age / chunkData.duration;
-      const opacity = 1 - fadeProgress;
+      if(fadeProgress > 0.95){
+        // Quick fade only in last 5%
+        chunkData.body.render.opacity = (1 - fadeProgress) / 0.05;
+      } else {
+        chunkData.body.render.opacity = 0.9; // Stay solid
+      }
 
-      // Update render opacity (Matter.js will render it)
-      chunkData.body.render.opacity = opacity;
+      return true;
+    });
 
-      return true; // Keep chunk until fully faded
+    // Update and cleanup crush particles (keep solid until removal)
+    window.crushParticles = (window.crushParticles || []).filter(particleData => {
+      const age = now - particleData.createdAt;
+      if(age > particleData.duration){
+        return false; // Already auto-removed by setTimeout
+      }
+
+      // Keep solid until very end
+      const fadeProgress = age / particleData.duration;
+      if(fadeProgress > 0.92){
+        // Quick fade only in last 8%
+        particleData.body.render.opacity = (1 - fadeProgress) / 0.08;
+      } else {
+        particleData.body.render.opacity = 0.7; // Stay visible
+      }
+
+      return true;
+    });
+
+    // Update and cleanup crack particles (keep solid until removal)
+    window.crackParticles = (window.crackParticles || []).filter(particleData => {
+      const age = now - particleData.createdAt;
+      if(age > particleData.duration){
+        return false; // Already auto-removed by setTimeout
+      }
+
+      // Keep solid until very end
+      const fadeProgress = age / particleData.duration;
+      if(fadeProgress > 0.92){
+        // Quick fade only in last 8%
+        particleData.body.render.opacity = (1 - fadeProgress) / 0.08;
+      } else {
+        particleData.body.render.opacity = 0.8; // Stay visible
+      }
+
+      return true;
     });
 
     ctx.restore();
@@ -7613,50 +7769,57 @@ function checkAndExplodeIfNeeded(){
   // Sort by age
   const sortedByAge = blocks.sort((a, b) => a.createdAt - b.createdAt);
 
-  // Clear all atRisk flags first
-  blocks.forEach(b => b.atRisk = false);
+  // Clear atRisk flags ONLY for blocks not marked for crumbling
+  blocks.forEach(b => {
+    if(!b.markedForCrumble){
+      b.atRisk = false;
+    }
+  });
 
-  // Mark oldest 25% of blocks as "at risk" if stack is getting high
+  // Sentence oldest blocks to crumble if stack is getting high (ONE WAY TRIP!)
   if(fillRatio > WARNING_THRESHOLD){
-    const numAtRisk = Math.ceil(blocks.length * 0.25);
-    for(let i = 0; i < numAtRisk; i++){
-      sortedByAge[i].atRisk = true;  // Visual warning (pulsing red glow)
+    const numToSentence = Math.ceil(blocks.length * 0.25);
+
+    for(let i = 0; i < numToSentence; i++){
+      const block = sortedByAge[i];
+
+      // Mark for crumbling if not already marked
+      if(!block.markedForCrumble){
+        const crumbleDelay = 5000 + Math.random() * 1000; // 5-6 seconds countdown
+        block.markedForCrumble = true;
+        block.crumbleAt = Date.now() + crumbleDelay;
+        block.atRisk = true;  // Show visual warning
+
+        console.log(`⏰ [physics] Sentenced ${block.displayPath} to crumble in ${(crumbleDelay/1000).toFixed(1)}s (no escape!)`);
+      }
     }
   }
 
   // Debug logging (throttled to avoid spam)
-  if(!window.lastStackCheckLog || Date.now() - window.lastStackCheckLog > 3000){
+  const now = Date.now();
+  if(!window.lastStackCheckLog || now - window.lastStackCheckLog > 3000){
     if(settledBlocks.length > 5){ // Only log if there's actually a stack
-      console.log(`📊 [physics] Stack status: ${settledBlocks.length} settled blocks, top at ${stackTop.toFixed(0)}px, fill: ${(fillRatio * 100).toFixed(0)}%`);
-      window.lastStackCheckLog = Date.now();
+      const markedCount = blocks.filter(b => b.markedForCrumble).length;
+      console.log(`📊 [physics] Stack: ${settledBlocks.length} settled, top at ${stackTop.toFixed(0)}px, fill: ${(fillRatio * 100).toFixed(0)}%, marked: ${markedCount}`);
+      window.lastStackCheckLog = now;
     }
   }
 
-  // Trigger explosions if stack reaches danger threshold
-  if(fillRatio > DANGER_THRESHOLD || window.fallingBlocks.size > 40){
-    // Stack too high! Start exploding oldest blocks
-    const numToExplode = Math.min(6, Math.floor(window.fallingBlocks.size * 0.25)); // Explode 25% of blocks
-
-    const oldest = sortedByAge.slice(0, numToExplode);
-
-    console.log(`💥 [physics] Stack too high! (${(fillRatio * 100).toFixed(0)}% filled, ${window.fallingBlocks.size} total, ${settledBlocks.length} settled)`);
-    console.log(`   🧨 Exploding ${oldest.length} oldest blocks...`);
-
-    // Stagger explosions for cascading effect
-    oldest.forEach((blockData, index) => {
-      setTimeout(() => {
-        if(window.fallingBlocks.has(blockData.body.id)){
-          explodeBlock(blockData);
-        }
-      }, index * 80); // 80ms delay between each explosion for cascade
-    });
-  }
+  // Check for blocks whose countdown has expired
+  blocks.forEach((blockData) => {
+    if(blockData.markedForCrumble && now >= blockData.crumbleAt){
+      if(window.fallingBlocks.has(blockData.body.id)){
+        console.log(`💀 [physics] Countdown expired! Crumbling ${blockData.displayPath}`);
+        crumbleBlock(blockData);
+      }
+    }
+  });
 }
 
 // Crumble a block into falling chunks (digital decay effect)
 window.crumblingChunks = window.crumblingChunks || []; // Track crumbling fragments
 
-function explodeBlock(blockData){
+function crumbleBlock(blockData){
   const body = blockData.body;
   const pos = body.position;
   const width = body.bounds.max.x - body.bounds.min.x;
@@ -7709,11 +7872,11 @@ function explodeBlock(blockData){
 
     Matter.World.add(window.physicsWorld, chunk);
 
-    // Track chunk for fade-out rendering
+    // Track chunk for removal (stays solid, then quick disappear)
     window.crumblingChunks.push({
       body: chunk,
       createdAt: Date.now(),
-      duration: 3500,  // 3.5 seconds to fade
+      duration: 2000,  // 2 seconds then remove
       language: blockData.language
     });
   }
@@ -7722,7 +7885,12 @@ function explodeBlock(blockData){
   Matter.World.remove(window.physicsWorld, body);
   window.fallingBlocks.delete(body.id);
 
-  console.log(`   ✨ Created ${numChunks} crumbling chunks`);
+  // Clear collision tracking for this block
+  if(window.activeCollisions){
+    window.activeCollisions.delete(body.id);
+  }
+
+  console.log(`   ✨ Created ${numChunks} crumbling chunks (solid for 2s, then vanish)`);
 
   // Optional: Very subtle gravity disturbance to nearby blocks (no visual effect)
   for(const [id, otherData] of window.fallingBlocks){
@@ -7745,6 +7913,124 @@ function explodeBlock(blockData){
       });
     }
   }
+}
+
+// Emit small crush particle (dust being squeezed out from compression)
+window.crushParticles = window.crushParticles || [];
+
+function emitCrushParticle(x, y, language){
+  if(!window.physicsWorld) return;
+
+  const size = 2 + Math.random() * 4; // Tiny dust particles
+
+  // Get color from language
+  let color = '#39bae6';
+  const colorFn = window.getLanguageColor || (typeof getLanguageColor !== 'undefined' ? getLanguageColor : null);
+  if(colorFn){
+    color = colorFn(language);
+  }
+
+  const particle = Matter.Bodies.circle(x, y, size, {
+    restitution: 0.2,
+    friction: 0.8,
+    density: 0.0003,
+    render: {
+      fillStyle: color + 'AA',  // Semi-transparent
+      strokeStyle: 'transparent',
+      lineWidth: 0
+    }
+  });
+
+  // Gentle sideways motion (being squeezed out)
+  const sideways = (Math.random() - 0.5) * 0.015;
+  const upward = -0.008 - Math.random() * 0.005; // Float upward slightly
+
+  Matter.Body.setVelocity(particle, {
+    x: sideways,
+    y: upward
+  });
+
+  Matter.World.add(window.physicsWorld, particle);
+
+  // Track for removal (stays solid)
+  window.crushParticles.push({
+    body: particle,
+    createdAt: Date.now(),
+    duration: 1200  // 1.2 seconds then remove
+  });
+
+  // Auto-cleanup
+  setTimeout(() => {
+    if(window.physicsWorld){
+      try {
+        Matter.World.remove(window.physicsWorld, particle);
+      } catch(e){
+        // Already removed
+      }
+    }
+  }, 1200);
+}
+
+// Emit crack particle (fragment breaking off from block edge under pressure)
+window.crackParticles = window.crackParticles || [];
+
+function emitCrackParticle(x, y, language){
+  if(!window.physicsWorld) return;
+
+  const size = 3 + Math.random() * 6; // Slightly larger than crush dust (visible fragments)
+
+  // Get color from language
+  let color = '#39bae6';
+  const colorFn = window.getLanguageColor || (typeof getLanguageColor !== 'undefined' ? getLanguageColor : null);
+  if(colorFn){
+    color = colorFn(language);
+  }
+
+  // Use rectangles for crack fragments (not circles - looks more like chipped pieces)
+  const w = size * (0.8 + Math.random() * 0.4);
+  const h = size * (0.8 + Math.random() * 0.4);
+
+  const particle = Matter.Bodies.rectangle(x, y, w, h, {
+    restitution: 0.4,
+    friction: 0.6,
+    density: 0.0004,
+    angle: Math.random() * Math.PI * 2,
+    angularVelocity: (Math.random() - 0.5) * 0.1,
+    render: {
+      fillStyle: color + '99',  // More transparent
+      strokeStyle: color + 'DD',
+      lineWidth: 1
+    }
+  });
+
+  // Fall downward with slight horizontal variance (pieces breaking off)
+  const sideways = (Math.random() - 0.5) * 0.01;
+  const downward = 0.005 + Math.random() * 0.005; // Fall down (not up!)
+
+  Matter.Body.setVelocity(particle, {
+    x: sideways,
+    y: downward
+  });
+
+  Matter.World.add(window.physicsWorld, particle);
+
+  // Track for removal (stays solid)
+  window.crackParticles.push({
+    body: particle,
+    createdAt: Date.now(),
+    duration: 1500  // 1.5 seconds then remove
+  });
+
+  // Auto-cleanup
+  setTimeout(() => {
+    if(window.physicsWorld){
+      try {
+        Matter.World.remove(window.physicsWorld, particle);
+      } catch(e){
+        // Already removed
+      }
+    }
+  }, 1500);
 }
 
 // Restore Matter.js and initialize physics
@@ -7783,13 +8069,29 @@ window.clearAllFallingBlocks = function(){
   });
   window.crumblingChunks = [];
 
-  console.log('🧹 [physics] Cleared all blocks and chunks');
+  // Clear crush particles
+  (window.crushParticles || []).forEach(particle => {
+    Matter.World.remove(window.physicsWorld, particle.body);
+  });
+  window.crushParticles = [];
+
+  // Clear crack particles
+  (window.crackParticles || []).forEach(particle => {
+    try {
+      Matter.World.remove(window.physicsWorld, particle.body);
+    } catch(e){
+      // Already removed
+    }
+  });
+  window.crackParticles = [];
+
+  console.log('🧹 [physics] Cleared all blocks, chunks, and particles');
 };
 
-// Expose explosion trigger for testing/manual cleanup
-window.explodeOldestBlocks = function(count = 5){
+// Expose crumble trigger for testing/manual cleanup
+window.crumbleOldestBlocks = function(count = 5){
   if(!window.physicsWorld || window.fallingBlocks.size === 0){
-    console.warn('No blocks to explode!');
+    console.warn('No blocks to crumble!');
     return;
   }
 
@@ -7798,15 +8100,18 @@ window.explodeOldestBlocks = function(count = 5){
     .sort((a, b) => a.createdAt - b.createdAt)
     .slice(0, count);
 
-  console.log(`🧨 [manual] Exploding ${oldest.length} blocks...`);
+  console.log(`🧱 [manual] Crumbling ${oldest.length} blocks...`);
   oldest.forEach((blockData, index) => {
     setTimeout(() => {
       if(window.fallingBlocks.has(blockData.body.id)){
-        explodeBlock(blockData);
+        crumbleBlock(blockData);
       }
-    }, index * 100); // Staggered for effect
+    }, index * 120); // Staggered cascade
   });
 };
+
+// Legacy alias
+window.explodeOldestBlocks = window.crumbleOldestBlocks;
 
 // Collision particles system
 window.collisionParticles = [];
