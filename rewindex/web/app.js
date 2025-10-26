@@ -7170,9 +7170,49 @@ function initPhysicsSimulation(){
   Matter.Runner.run(window.physicsRunner, window.physicsEngine);
   Matter.Render.run(window.physicsRender);
 
-  // Custom text rendering
+  // Listen for block-to-block collisions
+  Matter.Events.on(window.physicsEngine, 'collisionStart', (event) => {
+    console.log('💥 [physics] Collision event:', event.pairs.length, 'pairs');
+    event.pairs.forEach(pair => {
+      const bodyA = pair.bodyA;
+      const bodyB = pair.bodyB;
+
+      // Only particles for block-to-block collisions (not walls/ground)
+      const isBlockA = window.fallingBlocks.has(bodyA.id);
+      const isBlockB = window.fallingBlocks.has(bodyB.id);
+
+      console.log('💥 [physics] Pair:', {isBlockA, isBlockB, bodyAId: bodyA.id, bodyBId: bodyB.id});
+
+      if(isBlockA && isBlockB){
+        const colorA = bodyA.render.fillStyle;
+        const colorB = bodyB.render.fillStyle;
+        const point = pair.collision.supports[0];
+        
+        // Calculate impact velocity
+        const vA = bodyA.velocity;
+        const vB = bodyB.velocity;
+        const relativeVelocity = Math.sqrt(
+          Math.pow(vA.x - vB.x, 2) + Math.pow(vA.y - vB.y, 2)
+        );
+        
+        console.log('💥 [physics] Block collision! Velocity:', relativeVelocity.toFixed(2));
+        
+        if(point && window.spawnCollisionParticles){
+          window.spawnCollisionParticles(point, colorA, colorB, relativeVelocity);
+        }
+      }
+    });
+  });
+
+  // Custom text rendering and particle effects
   Matter.Events.on(window.physicsRender, 'afterRender', () => {
     const ctx = window.physicsRender.context;
+
+    // Update and render particles FIRST (behind text)
+    if(typeof window.updateParticles === 'function'){
+      window.updateParticles();
+    }
+
     ctx.save();
 
     window.fallingBlocks.forEach((data) => {
@@ -7203,10 +7243,8 @@ function initPhysicsSimulation(){
       ctx.font = '15px monospace';
       ctx.fontWeight = '500';
       ctx.lineWidth = 4;
-
       //ctx.strokeText(text, 0, 4);
       ctx.fillText(text, 0, 4);
-
       ctx.restore();
     });
 
@@ -7220,10 +7258,10 @@ window.spawnFallingFileBlock = function(fileData){
   if(!window.physicsEngine || !window.fallingFilesEnabled) return;
 
   const { file_path, language, action } = fileData;
-
-
   // Use full path, not just filename
   const displayPath = file_path;
+
+
 
   // Spawn position: avoid first 500px (sidebar area)
   const minX = 550;  // After sidebar (435px) + margin
@@ -7317,3 +7355,121 @@ window.clearAllFallingBlocks = function(){
   window.fallingBlocks.clear();
   console.log('🧹 [physics] Cleared all blocks');
 };
+
+// Collision particles system
+window.collisionParticles = [];
+
+// Listen for collisions
+if(window.physicsEngine){
+  Matter.Events.on(window.physicsEngine, 'collisionStart', (event) => {
+    event.pairs.forEach(pair => {
+      const bodyA = pair.bodyA;
+      const bodyB = pair.bodyB;
+
+      // Only create particles for block-to-block collisions (not walls/ground)
+      const isBlockA = window.fallingBlocks.has(bodyA.id);
+      const isBlockB = window.fallingBlocks.has(bodyB.id);
+
+      if(isBlockA && isBlockB){
+        // Get colors of both blocks
+        const colorA = bodyA.render.fillStyle;
+        const colorB = bodyB.render.fillStyle;
+
+        // Spawn particles at collision point
+        spawnCollisionParticles(pair.collision.supports[0], colorA, colorB);
+      }
+    });
+  });
+}
+
+window.spawnCollisionParticles = function(point, colorA, colorB){
+  console.log('✨ [particles] Spawning at', point, 'colors:', colorA, colorB);
+  if(!point) return;
+
+  // Mix the two colors
+  const mixedColor = window.mixColors(colorA, colorB);
+
+  // Spawn 6-10 small particles
+  const particleCount = Math.floor(Math.random() * 5) + 6;
+  console.log('✨ [particles] Creating', particleCount, 'particles, color:', mixedColor);
+
+  for(let i = 0; i < particleCount; i++){
+    const angle = Math.random() * Math.PI * 2;
+    const speed = Math.random() * 3 + 2;
+    const vx = Math.cos(angle) * speed;
+    const vy = Math.sin(angle) * speed - 2; // Slight upward bias
+
+
+    const particle = { 
+      x: point.x,
+      y: point.y,
+      vx: vx,
+      vy: vy,
+      size: Math.random() + 2,  // Bigger for debugging  
+      color: mixedColor,
+      alpha: 1.0,
+      life: 1.0,
+      createdAt: Date.now()
+    };
+
+    window.collisionParticles.push(particle);
+  }
+}
+
+window.mixColors = function(colorA, colorB){
+  // Parse HSL colors and blend
+  // For simplicity, just alternate or pick one
+  return Math.random() > 0.5 ? colorA : colorB;
+}
+
+// Update and render particles (call in render loop)
+window.updateParticles = function(){
+  const ctx = window.physicsRender?.context;
+  if(!ctx) return;
+
+  // Debug: log particle count occasionally
+  if(window.collisionParticles.length > 0 && Math.random() < 0.05){
+    console.log('✨ [particles] Active particles:', window.collisionParticles.length);
+  }
+
+  // Update physics
+  for(let i = window.collisionParticles.length - 1; i >= 0; i--){
+    const p = window.collisionParticles[i];
+
+    // Apply gravity  
+    p.vy += 0.3;  // Slower gravity 
+    p.x += p.vx;
+    p.y += p.vy;
+
+    // Fade out
+    p.life -= 0.01;  // Fade slower
+    p.alpha = p.life;
+
+    // Remove if dead
+    if(p.life <= 0){
+      window.collisionParticles.splice(i, 1);
+    }
+  }
+
+  // Render
+  if(window.collisionParticles.length > 0){
+    console.log('✨ [particles] Rendering', window.collisionParticles.length, 'particles');
+  }
+  ctx.save();
+  window.collisionParticles.forEach(p => {
+    ctx.globalAlpha = p.alpha;
+    ctx.fillStyle = p.color;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+    ctx.fill();
+  });
+  ctx.restore();
+}
+
+// Add to render loop
+if(window.physicsRender){
+  Matter.Events.on(window.physicsRender, 'afterRender', () => {
+    updateParticles();
+  });
+}
+
