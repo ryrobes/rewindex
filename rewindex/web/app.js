@@ -4968,8 +4968,9 @@
     linePath.setAttribute('d', linePathBefore);
     linePath.setAttribute('fill', 'none');
     linePath.setAttribute('stroke', accentColor || '#39bae6');
-    linePath.setAttribute('stroke-width', '1');
+    linePath.setAttribute('stroke-width', '1.5');
     linePath.setAttribute('stroke-opacity', '1');
+    linePath.setAttribute('vector-effect', 'non-scaling-stroke');
     svg.appendChild(linePath);
 
     // Create dimmed "after" portion (future from selected timestamp)
@@ -4986,9 +4987,10 @@
       linePathDimmed.setAttribute('d', linePathAfter);
       linePathDimmed.setAttribute('fill', 'none');
       linePathDimmed.setAttribute('stroke', accentColor || '#39bae6');
-      linePathDimmed.setAttribute('stroke-width', '1');
+      linePathDimmed.setAttribute('stroke-width', '1.5');
       linePathDimmed.setAttribute('stroke-opacity', '0.15'); // Much dimmer
       linePathDimmed.setAttribute('stroke-dasharray', '4,4'); // Dashed to show it's "future"
+      linePathDimmed.setAttribute('vector-effect', 'non-scaling-stroke');
       linePathDimmed.setAttribute('class', 'timeline-future-dimmed');
       svg.appendChild(linePathDimmed);
     }
@@ -7270,7 +7272,7 @@ window.spawnFallingFileBlock = function(fileData){
   const y = -50;
 
   // Width based on full path length (make it fit!)
-  const charWidth = 11;  // Approximate monospace char width
+  const charWidth = 14;  // Approximate monospace char width
   const padding = 24;
   const width = Math.min(600, Math.max(150, displayPath.length * charWidth + padding));
   const height = 60;  // Taller to fit action + path
@@ -7452,9 +7454,9 @@ window.updateParticles = function(){
   }
 
   // Render
-  if(window.collisionParticles.length > 0){
-    console.log('✨ [particles] Rendering', window.collisionParticles.length, 'particles');
-  }
+  // if(window.collisionParticles.length > 0){
+  //   console.log('✨ [particles] Rendering', window.collisionParticles.length, 'particles');
+  // }
   ctx.save();
   window.collisionParticles.forEach(p => {
     ctx.globalAlpha = p.alpha;
