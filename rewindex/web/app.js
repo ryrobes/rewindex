@@ -4971,20 +4971,18 @@
     }
     const H = sparklineEl.clientHeight || 32;
 
-    // Better normalization: use 95th percentile to handle outliers
+    // Log scale normalization: makes all activity visible regardless of magnitude
     const counts = series.map(b => b.count || 0);
-    const sorted = [...counts].sort((a, b) => a - b);
-    const p95Index = Math.floor(sorted.length * 0.95);
-    const p95Value = sorted[p95Index] || 1;
 
-    // Use 95th percentile as max, but ensure we have at least some value
-    const maxCount = Math.max(1, p95Value);
+    // Find max for reference
+    const maxCount = Math.max(1, ...counts);
 
     // Filter out zero-count buckets to remove long inactive spans
     const filtered = series.filter(b => (b.count||0) > 0);
     const data = filtered.length ? filtered : series;
     const svgNS = 'http://www.w3.org/2000/svg';
     const n = Math.max(2, data.length);
+
     // Use normalized viewBox so it scales to container width smoothly
     const svg = document.createElementNS(svgNS, 'svg');
     svg.setAttribute('viewBox', `0 0 ${n-1} ${H}`);
@@ -4998,11 +4996,29 @@
     const paddingBottom = H * 0.2;
     const availableHeight = H - paddingTop - paddingBottom;
 
-    // Calculate y positions for all points
+    // Calculate y positions using LOG SCALE + minimum floor
     const points = data.map((b, i) => {
       const x = i;
-      const clippedCount = Math.min(b.count || 0, maxCount);
-      const yHeight = Math.max(1, (clippedCount / maxCount) * availableHeight);
+      const rawCount = b.count || 0;
+
+      if(rawCount === 0){
+        // No activity - baseline
+        const y = paddingTop + availableHeight;
+        return { x, y };
+      }
+
+      // Log scale: log(1 + count) compresses large values, expands small ones
+      const logValue = Math.log(1 + rawCount);
+      const maxLogValue = Math.log(1 + maxCount);
+
+      // Normalize to 0-1 range with log scale
+      const normalized = logValue / maxLogValue;
+
+      // Apply minimum floor: any activity gets at least 15% height
+      const MIN_HEIGHT_RATIO = 0.15;
+      const heightRatio = Math.max(MIN_HEIGHT_RATIO, normalized);
+
+      const yHeight = heightRatio * availableHeight;
       const y = paddingTop + (availableHeight - yHeight);
       return { x, y };
     });
@@ -7464,30 +7480,8 @@ function initPhysicsSimulation(){
       ctx.translate(body.position.x, body.position.y);
       ctx.rotate(body.angle);
 
-      // No fade-out - blocks stay solid until removed
-      // (exploding blocks are removed instantly when they crumble)
-
-      // Distortion ripple for blocks at risk (countdown effect)
-      if(data.atRisk && data.markedForCrumble){
-        const timeLeft = data.crumbleAt - Date.now();
-        const countdownProgress = 1 - (timeLeft / 6000); // 0->1 over 6 seconds
-
-        // Intensify distortion as countdown progresses
-        const intensity = 0.05 + countdownProgress * 0.1; // Start subtle, get more violent
-        const pulseTime = Date.now() % 1200;
-        const pulseProgress = pulseTime / 1200;
-
-        // Wave distortion - scale pulses in and out (faster as countdown progresses)
-        const distortAmount = Math.sin(pulseProgress * Math.PI * 2 * (1 + countdownProgress)) * intensity;
-        const scaleX = 1 + distortAmount;
-        const scaleY = 1 - distortAmount * 0.5;
-
-        ctx.scale(scaleX, scaleY);
-
-        // Pulsing opacity gets more aggressive
-        const alphaPulse = Math.sin(pulseProgress * Math.PI * 4) * (0.05 + countdownProgress * 0.15);
-        ctx.globalAlpha = 0.95 + alphaPulse;
-      }
+      // No visual distortion - just show countdown and particles
+      // Blocks stay solid and stable, only particles show degradation
 
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
@@ -7525,18 +7519,19 @@ function initPhysicsSimulation(){
     window.lastCrushParticleEmit = window.lastCrushParticleEmit || 0;
     window.lastCrackParticleEmit = window.lastCrackParticleEmit || 0;
 
-    // Emit crush particles at contact points every 200ms
+    // Emit crush particles at contact points every 200ms (only from marked blocks)
     if(now - window.lastCrushParticleEmit > 200){
       window.fallingBlocks.forEach((data) => {
-        if(data.atRisk && !data.exploding){
+        if(data.markedForCrumble){
           const collisions = window.activeCollisions.get(data.body.id) || [];
 
           // Emit dust from contact points (being crushed!)
           if(collisions.length > 0){
+            const blockColor = data.body.render.fillStyle; // Use exact block color
             collisions.forEach(collision => {
               // Randomly emit (40% chance per contact for intermittent effect)
               if(Math.random() < 0.4){
-                emitCrushParticle(collision.point.x, collision.point.y, data.language);
+                emitCrushParticle(collision.point.x, collision.point.y, blockColor);
               }
             });
           }
@@ -7551,7 +7546,7 @@ function initPhysicsSimulation(){
     // Emit cracking particles from block edges every 150ms (pieces breaking off)
     if(now - window.lastCrackParticleEmit > 150){
       window.fallingBlocks.forEach((data) => {
-        if(data.atRisk && data.markedForCrumble){
+        if(data.markedForCrumble){
           const timeLeft = data.crumbleAt - now;
           const countdownProgress = 1 - (timeLeft / 6000); // 0->1 as countdown progresses
 
@@ -7586,7 +7581,8 @@ function initPhysicsSimulation(){
                 break;
             }
 
-            emitCrackParticle(px, py, data.language);
+            const blockColor = data.body.render.fillStyle; // Use exact block color
+            emitCrackParticle(px, py, blockColor);
           }
         }
       });
@@ -7680,10 +7676,11 @@ window.spawnFallingFileBlock = function(fileData){
   const y = -50;
 
   // Width based on full path length (make it fit!)
-  const charWidth = 14;  // Approximate monospace char width
-  const padding = 24;
-  const width = Math.min(600, Math.max(150, displayPath.length * charWidth + padding));
-  const height = 60;  // Taller to fit action + path
+  const charWidth = 9;  // Approximate monospace char width
+  const padding = 6;
+  //const width = Math.min(600, Math.max(150, displayPath.length * charWidth + padding));
+  const width = displayPath.length * charWidth + padding;
+  const height = 50;  // Taller to fit action + path
 
 
   // IMPORTANT: Physics code runs in global scope (window.spawnFallingFileBlock)
@@ -7791,6 +7788,14 @@ function checkAndExplodeIfNeeded(){
         block.atRisk = true;  // Show visual warning
 
         console.log(`⏰ [physics] Sentenced ${block.displayPath} to crumble in ${(crumbleDelay/1000).toFixed(1)}s (no escape!)`);
+
+        // Schedule exact crumbling at countdown zero (guaranteed execution)
+        block.crumbleTimeout = setTimeout(() => {
+          if(window.fallingBlocks && window.fallingBlocks.has(block.body.id)){
+            console.log(`💀 [physics] Countdown ZERO! Crumbling ${block.displayPath}`);
+            crumbleBlock(block);
+          }
+        }, crumbleDelay);
       }
     }
   }
@@ -7805,15 +7810,8 @@ function checkAndExplodeIfNeeded(){
     }
   }
 
-  // Check for blocks whose countdown has expired
-  blocks.forEach((blockData) => {
-    if(blockData.markedForCrumble && now >= blockData.crumbleAt){
-      if(window.fallingBlocks.has(blockData.body.id)){
-        console.log(`💀 [physics] Countdown expired! Crumbling ${blockData.displayPath}`);
-        crumbleBlock(blockData);
-      }
-    }
-  });
+  // Crumbling happens via setTimeout (scheduled when block is sentenced)
+  // No manual checking needed - guaranteed execution at countdown zero
 }
 
 // Crumble a block into falling chunks (digital decay effect)
@@ -7881,6 +7879,11 @@ function crumbleBlock(blockData){
     });
   }
 
+  // Clear scheduled crumble timeout if it exists
+  if(blockData.crumbleTimeout){
+    clearTimeout(blockData.crumbleTimeout);
+  }
+
   // Remove original block immediately (it's been replaced by chunks)
   Matter.World.remove(window.physicsWorld, body);
   window.fallingBlocks.delete(body.id);
@@ -7918,24 +7921,20 @@ function crumbleBlock(blockData){
 // Emit small crush particle (dust being squeezed out from compression)
 window.crushParticles = window.crushParticles || [];
 
-function emitCrushParticle(x, y, language){
+function emitCrushParticle(x, y, blockColor){
   if(!window.physicsWorld) return;
 
   const size = 2 + Math.random() * 4; // Tiny dust particles
 
-  // Get color from language
-  let color = '#39bae6';
-  const colorFn = window.getLanguageColor || (typeof getLanguageColor !== 'undefined' ? getLanguageColor : null);
-  if(colorFn){
-    color = colorFn(language);
-  }
+  // Use exact block color (already has alpha channel)
+  const color = blockColor;
 
   const particle = Matter.Bodies.circle(x, y, size, {
     restitution: 0.2,
     friction: 0.8,
     density: 0.0003,
     render: {
-      fillStyle: color + 'AA',  // Semi-transparent
+      fillStyle: color,  // Use block's exact color
       strokeStyle: 'transparent',
       lineWidth: 0
     }
@@ -7974,17 +7973,13 @@ function emitCrushParticle(x, y, language){
 // Emit crack particle (fragment breaking off from block edge under pressure)
 window.crackParticles = window.crackParticles || [];
 
-function emitCrackParticle(x, y, language){
+function emitCrackParticle(x, y, blockColor){
   if(!window.physicsWorld) return;
 
   const size = 3 + Math.random() * 6; // Slightly larger than crush dust (visible fragments)
 
-  // Get color from language
-  let color = '#39bae6';
-  const colorFn = window.getLanguageColor || (typeof getLanguageColor !== 'undefined' ? getLanguageColor : null);
-  if(colorFn){
-    color = colorFn(language);
-  }
+  // Use exact block color
+  const color = blockColor;
 
   // Use rectangles for crack fragments (not circles - looks more like chipped pieces)
   const w = size * (0.8 + Math.random() * 0.4);
@@ -7997,8 +7992,8 @@ function emitCrackParticle(x, y, language){
     angle: Math.random() * Math.PI * 2,
     angularVelocity: (Math.random() - 0.5) * 0.1,
     render: {
-      fillStyle: color + '99',  // More transparent
-      strokeStyle: color + 'DD',
+      fillStyle: color,  // Use block's exact color
+      strokeStyle: color,  // Match fill
       lineWidth: 1
     }
   });
