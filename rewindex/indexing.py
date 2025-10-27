@@ -369,8 +369,13 @@ def index_project(project_root: Path, cfg: Config, on_event: Optional[Callable[[
         file_id = f"{project_id}:{rel_path}"
         existing = es.get_doc(files_index, file_id)
         prev_hash = None
+        existing_version_count = 1
         if existing and existing.get("_source"):
             prev_hash = existing["_source"].get("content_hash")
+            existing_version_count = existing["_source"].get("version_count", 1)
+
+        # Increment version count if content changed
+        version_count = existing_version_count + 1 if (prev_hash and prev_hash != h) else existing_version_count
 
         body = {
             "content": content,
@@ -385,6 +390,7 @@ def index_project(project_root: Path, cfg: Config, on_event: Optional[Callable[[
             "content_hash": h,
             "previous_hash": prev_hash,
             "is_current": True,
+            "version_count": version_count,  # Track version history depth
             "project_id": project_id,
             "project_root": str(root),
             **metas,
@@ -619,12 +625,17 @@ def _index_binary_file(
     file_id = f"{project_id}:{rel_path}"
     existing = es.get_doc(files_index, file_id)
     prev_hash = None
+    existing_version_count = 1
     if existing and existing.get("_source"):
         prev_hash = existing["_source"].get("content_hash")
+        existing_version_count = existing["_source"].get("version_count", 1)
 
     # Skip if unchanged
     if prev_hash == h:
         return "skipped"
+
+    # Increment version count if this is a change (not first index)
+    version_count = existing_version_count + 1 if prev_hash else 1
 
     body = {
         "content": "",  # Empty for binaries!
@@ -641,6 +652,7 @@ def _index_binary_file(
         "is_current": True,
         "is_binary": True,
         "binary_type": binary_type,
+        "version_count": version_count,  # Track version history depth
         "project_id": project_id,
         "project_root": str(project_root),
         # No metadata extraction for binaries

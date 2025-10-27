@@ -947,6 +947,16 @@
       fileHeader.appendChild(file);
       fileHeader.appendChild(scoreBadge);
 
+      // Add version count badge if file has multiple versions
+      const versionCount = fileGroup.resultSets[0].version_count || 1;
+      if(versionCount > 1){
+        const versionBadge = document.createElement('span');
+        versionBadge.className = 'version-badge';
+        versionBadge.textContent = `v${versionCount}`;
+        versionBadge.title = `${versionCount} versions in history`;
+        fileHeader.appendChild(versionBadge);
+      }
+
       // Render ALL matches from ALL result sets
       const matchesContainer = document.createElement('div');
       matchesContainer.className = 'result-matches';
@@ -1474,6 +1484,16 @@
         fileHeader.appendChild(scoreBadge);
       } else {
         fileHeader.appendChild(file);
+      }
+
+      // Add version count badge if file has multiple versions
+      const versionCount = r.version_count || 1;
+      if(versionCount > 1){
+        const versionBadge = document.createElement('span');
+        versionBadge.className = 'version-badge';
+        versionBadge.textContent = `v${versionCount}`;
+        versionBadge.title = `${versionCount} versions in history`;
+        fileHeader.appendChild(versionBadge);
       }
 
       // Matches (line numbers + snippets)

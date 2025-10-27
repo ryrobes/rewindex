@@ -1633,6 +1633,20 @@ body {
   color: #50fa7b;
 }
 
+.version-badge {
+  font-size: 9px;
+  font-weight: 700;
+  padding: 2px 6px;
+  margin-left: 4px;
+  margin-right: -5px;
+  background: rgba(139, 233, 253, 0.15);
+  color: #8be9fd;
+  border-radius: 3px;
+  border: 1px solid rgba(139, 233, 253, 0.3);
+  flex-shrink: 0;
+  font-family: var(--font-mono), monospace;
+}
+
 .result-matches {
   margin-left: 10px;
   /* font-family: var(--font-mono), 'Fira Code', monospace; */

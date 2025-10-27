@@ -290,6 +290,7 @@ def simple_search_es(
             "preview_height": src.get("preview_height"),
             "original_width": src.get("original_width"),
             "original_height": src.get("original_height"),
+            "version_count": src.get("version_count", 1),
             "metadata": {
                 "size_bytes": src.get("size_bytes"),
                 "line_count": src.get("line_count"),
