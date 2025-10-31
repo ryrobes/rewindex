@@ -949,12 +949,17 @@
 
       // Add version count badge if file has multiple versions
       const versionCount = fileGroup.resultSets[0].version_count || 1;
+      console.log(`[Version Debug] ${fileGroup.file_path}: version_count =`, versionCount, 'from result:', fileGroup.resultSets[0]);
+
       if(versionCount > 1){
         const versionBadge = document.createElement('span');
         versionBadge.className = 'version-badge';
         versionBadge.textContent = `v${versionCount}`;
         versionBadge.title = `${versionCount} versions in history`;
         fileHeader.appendChild(versionBadge);
+        console.log(`   ✅ Showing badge: v${versionCount}`);
+      } else {
+        console.log(`   ⚠️  Only 1 version, no badge shown`);
       }
 
       // Render ALL matches from ALL result sets
@@ -4058,13 +4063,21 @@
   // Path filter input - re-search or update overview when changed
   if(pathFilterInput){
     pathFilterInput.addEventListener('input', ()=>{
+      console.log('🔍 [pathFilter] Input changed:', pathFilterInput.value);
       if(searchTimer) clearTimeout(searchTimer);
       searchTimer = setTimeout(()=> {
-        if(qEl.value.trim()){
+        const hasQuery = qEl.value.trim();
+        console.log(`🔍 [pathFilter] Timer fired - hasQuery: ${!!hasQuery}, resultsOnlyMode: ${resultsOnlyMode}`);
+
+        if(hasQuery){
+          console.log('   → Calling doSearch()');
           doSearch(); // Re-run search with new path filter
         } else if(resultsOnlyMode){
           // Empty search: update overview with new filter
+          console.log('   → Calling renderCodebaseOverview()');
           renderCodebaseOverview();
+        } else {
+          console.log('   → NOT in results-only mode, skipping overview update');
         }
       }, 300);
     });
@@ -4082,13 +4095,21 @@
   // Path exclude input - re-search or update overview when changed
   if(pathExcludeInput){
     pathExcludeInput.addEventListener('input', ()=>{
+      console.log('🚫 [pathExclude] Input changed:', pathExcludeInput.value);
       if(searchTimer) clearTimeout(searchTimer);
       searchTimer = setTimeout(()=> {
-        if(qEl.value.trim()){
+        const hasQuery = qEl.value.trim();
+        console.log(`🚫 [pathExclude] Timer fired - hasQuery: ${!!hasQuery}, resultsOnlyMode: ${resultsOnlyMode}`);
+
+        if(hasQuery){
+          console.log('   → Calling doSearch()');
           doSearch(); // Re-run search with new exclude filter
         } else if(resultsOnlyMode){
           // Empty search: update overview with new filter
+          console.log('   → Calling renderCodebaseOverview()');
           renderCodebaseOverview();
+        } else {
+          console.log('   → NOT in results-only mode, skipping overview update');
         }
       }, 300);
     });
@@ -4125,8 +4146,13 @@
     pathFilterInput.addEventListener('focus', () => {
       showHistoryPanel(pathFilterInput, HISTORY_KEYS.path, (value) => {
         pathFilterInput.value = value;
+        console.log(`📋 [history] Path filter set to: ${value}`);
         if (qEl.value.trim()) {
           doSearch();
+        } else if(resultsOnlyMode){
+          // Empty search: update overview with selected path
+          console.log('   → Updating overview');
+          renderCodebaseOverview();
         }
       });
     });
@@ -4144,8 +4170,13 @@
     pathExcludeInput.addEventListener('focus', () => {
       showHistoryPanel(pathExcludeInput, HISTORY_KEYS.exclude, (value) => {
         pathExcludeInput.value = value;
+        console.log(`📋 [history] Exclude filter set to: ${value}`);
         if (qEl.value.trim()) {
           doSearch();
+        } else if(resultsOnlyMode){
+          // Empty search: update overview with exclude filter
+          console.log('   → Updating overview');
+          renderCodebaseOverview();
         }
       });
     });
@@ -4213,6 +4244,10 @@
       console.log(`📦 Binary files: ${showBinaries ? 'SHOWN' : 'HIDDEN'}`);
       if(qEl.value.trim()){
         doSearch(); // Re-run search to apply filter
+      } else if(resultsOnlyMode){
+        // Empty search: update overview with new binary filter
+        console.log('   → Calling renderCodebaseOverview() for binary toggle');
+        renderCodebaseOverview();
       }
     };
   }
@@ -4668,7 +4703,14 @@
       try{
         const data = JSON.parse(ev.data || '{}');
         const path = data.file_path || data.path;
-        const action = data.action || 'updated';
+        let action = data.action || 'updated';
+
+        // Enhance action display for renames
+        if(data.renamed_from){
+          action = 'renamed from ' + data.renamed_from.split('/').pop(); // Show old filename
+        } else if(data.renamed_to){
+          action = 'renamed to ' + data.renamed_to.split('/').pop(); // Show new filename
+        }
 
         // Spawn falling block if in overview mode
         if(!qEl.value.trim() && resultsOnlyMode && typeof window.spawnFallingFileBlock === 'function'){
@@ -7507,7 +7549,7 @@ function initPhysicsSimulation(){
       ctx.textBaseline = 'middle';
 
       // Draw countdown timer if marked for crumbling
-      if(data.markedForCrumble){
+      if(false) { //(data.markedForCrumble){ // debug: disable block distortion
         const timeLeft = Math.max(0, data.crumbleAt - Date.now());
         const seconds = (timeLeft / 1000).toFixed(1);
 

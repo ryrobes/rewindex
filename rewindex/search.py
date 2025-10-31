@@ -169,6 +169,7 @@ def simple_search_es(
                 "preview_height",
                 "original_width",
                 "original_height",
+                "version_count",
             ]
         },
     }

@@ -48,22 +48,28 @@ def _match_any(patterns: List[str], rel_path: str) -> bool:
     return False
 
 
-def _should_index_file(path: Path, rel_path: str, cfg: Config) -> bool:
+def _should_index_file(path: Path, rel_path: str, cfg: Config, debug: bool = False) -> bool:
     # Exclude patterns first
     if _match_any(cfg.indexing.exclude_patterns, rel_path):
+        if debug: print(f"       ❌ Excluded by pattern")
         return False
 
     # Include patterns: if any present, must match at least one
     if cfg.indexing.include_patterns:
         if not _match_any(cfg.indexing.include_patterns, rel_path):
+            if debug: print(f"       ❌ Doesn't match include patterns: {cfg.indexing.include_patterns}")
             return False
 
     try:
         size_mb = path.stat().st_size / (1024 * 1024)
         if size_mb > cfg.indexing.max_file_size_mb:
+            if debug: print(f"       ❌ File too large: {size_mb:.1f}MB > {cfg.indexing.max_file_size_mb}MB")
             return False
     except FileNotFoundError:
+        if debug: print(f"       ❌ File not found")
         return False
+
+    if debug: print(f"       ✅ File should be indexed")
     return True
 
 
@@ -785,12 +791,19 @@ def index_single_file(
     file_id = f"{project_id}:{rel_path}"
     existing = es.get_doc(files_index, file_id)
     prev_hash = None
+    existing_version_count = 1
     if existing and existing.get("_source"):
         prev_hash = existing["_source"].get("content_hash")
+        existing_version_count = existing["_source"].get("version_count", 1)
 
     # Skip if unchanged
     if prev_hash == h:
         return "skipped"
+
+    # Increment version count if this is a change (not first index)
+    version_count = existing_version_count + 1 if prev_hash else 1
+
+    print(f"🔢 [index_single_file] {rel_path}: prev_hash={bool(prev_hash)}, existing_count={existing_version_count}, new_count={version_count}")
 
     body = {
         "content": content,
@@ -805,12 +818,14 @@ def index_single_file(
         "content_hash": h,
         "previous_hash": prev_hash,
         "is_current": True,
+        "version_count": version_count,  # Track version history depth
         "project_id": project_id,
         "project_root": str(root),
         **metas,
     }
 
     es.put_doc(files_index, file_id, body)
+    print(f"   💾 Saved with version_count={version_count}")
 
     action = "added" if prev_hash is None else "updated"
     if on_event:
@@ -955,6 +970,27 @@ if WATCHDOG_AVAILABLE:
             self.batch_timer = threading.Timer(0.5, broadcast)
             self.batch_timer.start()
 
+        def _mark_file_deleted(self, rel_path: str):
+            """Mark a file as deleted in the index."""
+            try:
+                es = ESClient(self.cfg.elasticsearch.host)
+                idx = ensure_indices(es, self.cfg.resolved_index_prefix())
+                files_index = idx["files_index"]
+                project_id = self.cfg.project.id
+
+                file_id = f"{project_id}:{rel_path}"
+                existing = es.get_doc(files_index, file_id)
+
+                if existing and existing.get("_source"):
+                    src = existing["_source"]
+                    src["is_current"] = False
+                    src["deleted"] = True
+                    src["deleted_at"] = int(time.time() * 1000)
+                    es.put_doc(files_index, file_id, src)
+                    print(f"   ✅ Marked {rel_path} as deleted")
+            except Exception as e:
+                print(f"   ⚠️  Could not mark {rel_path} as deleted: {e}")
+
         def _should_ignore_path(self, path_str: str) -> bool:
             """Check if path should be ignored by watcher."""
             # Convert absolute path to relative for pattern matching
@@ -962,20 +998,23 @@ if WATCHDOG_AVAILABLE:
                 abs_path = Path(path_str)
                 rel_path = abs_path.relative_to(self.project_root)
                 rel_str = str(rel_path)
-            except (ValueError, Exception):
+            except (ValueError, Exception) as e:
                 # Path is outside project root or invalid - ignore it
+                print(f"   ⚠️  Path outside project root or invalid: {e}")
                 self.events_ignored += 1
                 return True
 
             # Use the same exclusion patterns as indexing
             # This respects .gitignore, .rewindexignore, and built-in patterns
             if _match_any(self.cfg.indexing.exclude_patterns, rel_str):
+                #print(f"   ⚠️  Matched exclusion pattern: {rel_str}")
                 self.events_ignored += 1
                 return True
 
             # Also check if _should_index_file would reject it
             # This ensures watcher and indexer are in sync
-            if not _should_index_file(abs_path, rel_str, self.cfg):
+            if not _should_index_file(abs_path, rel_str, self.cfg, debug=True):
+                print(f"   ⚠️  _should_index_file rejected: {rel_str}")
                 self.events_ignored += 1
                 return True
 
@@ -1014,6 +1053,7 @@ if WATCHDOG_AVAILABLE:
                 self.events_processed += 1
                 # Deletion events are typically handled by _mark_missing_as_deleted in full index scans
                 # Log deletion but don't process (file doesn't exist anymore)
+                
                 if self.events_processed % 50 == 0:
                     from datetime import datetime
                     timestamp = datetime.now().strftime("%H:%M:%S")
@@ -1023,19 +1063,70 @@ if WATCHDOG_AVAILABLE:
                 import traceback
                 traceback.print_exc()
 
-        def on_moved(self, event: FileSystemEvent):
+        def on_moved(self, event: FileSystemEvent): 
+            #print(f"🚚 [watchdog] on_moved called: {event.src_path} → {getattr(event, 'dest_path', 'unknown')}")
             if event.is_directory:
+                #print(f"   ⏭️  Skipping (directory)")
                 return
-            # Check both src and dest paths
-            if self._should_ignore_path(event.src_path):
+
+            # For rename/move, only check DESTINATION path (source doesn't exist anymore!)
+            if hasattr(event, 'dest_path'):
+                if self._should_ignore_path(event.dest_path):
+                    #print(f"   ⏭️  Skipping (dest ignored by pattern)")
+                    return
+            else:
+                print(f"   ⚠️  No dest_path in move event!")
                 return
-            if hasattr(event, 'dest_path') and self._should_ignore_path(event.dest_path):
-                return
+
             try:
-                # Process both old and new paths
-                self._process_file(Path(event.src_path))
-                if hasattr(event, 'dest_path'):
-                    self._process_file(Path(event.dest_path))
+                from datetime import datetime
+                timestamp = datetime.now().strftime("%H:%M:%S")
+
+                src_path = Path(event.src_path)
+                dest_path = Path(event.dest_path) if hasattr(event, 'dest_path') else None
+
+                print(f"   📦 src_path: {src_path}")
+                print(f"   📦 dest_path: {dest_path}")
+
+                if dest_path:
+                    src_rel = str(src_path.relative_to(self.project_root))
+                    dest_rel = str(dest_path.relative_to(self.project_root))
+
+                    print(f"[rewindex] [{timestamp}] RENAMED: {src_rel} → {dest_rel}")
+
+                    # Mark old path as deleted
+                    self._mark_file_deleted(src_rel)
+
+                    # Index new path (without auto-emitting events to avoid duplicates)
+                    action = index_single_file(dest_path, self.project_root, self.cfg, on_event=None)
+
+                    # Manually emit rename-aware events
+                    if self.on_event:
+                        try:
+                            lang = detect_language(dest_path)
+
+                            # Deletion event for old path (with renamed_to hint)
+                            self.on_event({
+                                "action": "deleted",
+                                "file_path": src_rel,
+                                "language": lang,  # Use same language as new file
+                                "renamed_to": dest_rel
+                            })
+
+                            # Addition event for new path (with renamed_from hint)
+                            if action in ("added", "updated"):
+                                self.on_event({
+                                    "action": "added",
+                                    "file_path": dest_rel,
+                                    "language": lang,
+                                    "renamed_from": src_rel
+                                })
+
+                            print(f"   📢 Emitted rename events (deletion + addition)")
+                        except Exception as e:
+                            print(f"   ⚠️  Could not emit events: {e}")
+
+                    self.events_processed += 1
             except Exception as e:
                 print(f"[rewindex] ERROR processing moved event: {e}")
                 import traceback
