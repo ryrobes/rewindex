@@ -22,6 +22,16 @@ docker compose up -d
 # Verify: curl http://localhost:9200
 ```
 
+**Remote Elasticsearch Server:**
+To use a remote Elasticsearch server instead of localhost, set the `REWINDEX_ES_HOST` environment variable:
+```bash
+export REWINDEX_ES_HOST="my-server.com:9200"
+# Or use inline for single commands:
+REWINDEX_ES_HOST="remote-es:9200" rewindex search "query"
+```
+
+This overrides the `elasticsearch.host` setting in `.rewindex.json` for all indexing and search operations.
+
 ### Installation
 ```bash
 # Developer mode (editable install)
@@ -434,6 +444,25 @@ rewindex tui
     }
   }
 }
+```
+
+### Environment Variables
+
+**REWINDEX_ES_HOST** - Override Elasticsearch host
+- Takes precedence over `elasticsearch.host` in config file
+- Format: `hostname:port` (e.g., `remote-server.com:9200`)
+- Default: `localhost:9200` (if not set in config or env)
+- Affects all operations: indexing, searching, status, etc.
+
+Example usage:
+```bash
+# Set globally for session
+export REWINDEX_ES_HOST="10.0.1.50:9200"
+rewindex index start
+rewindex search "query"
+
+# Or inline for specific command
+REWINDEX_ES_HOST="prod-es.company.com:9200" rewindex search "bug"
 ```
 
 ### File Filtering and Ignore Patterns

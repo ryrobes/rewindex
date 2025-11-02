@@ -266,6 +266,14 @@ class Config:
             if removed > 0:
                 print(f"[config] Binary indexing enabled: removed {removed} binary extension patterns from exclusions")
 
+        # Environment variable override for Elasticsearch host
+        # REWINDEX_ES_HOST takes precedence over config file
+        import os
+        es_host_env = os.getenv("REWINDEX_ES_HOST")
+        if es_host_env:
+            cfg.elasticsearch.host = es_host_env
+            print(f"[config] Using Elasticsearch host from REWINDEX_ES_HOST: {es_host_env}")
+
         return cfg
 
     def resolved_index_prefix(self) -> str:

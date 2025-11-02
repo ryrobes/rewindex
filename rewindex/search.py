@@ -34,6 +34,15 @@ class SearchOptions:
     search_name: bool = True  # Search file names
 
 
+def _needs_exact_phrase_matching(query: str) -> bool:
+    """Detect if query needs exact phrase matching (contains special chars or quoted)."""
+    if not query:
+        return False
+    # Check for special characters that are typically removed by tokenizers
+    special_chars = [',', ';', ':', '(', ')', '[', ']', '{', '}', '<', '>', '|', '/', '\\']
+    return any(char in query for char in special_chars)
+
+
 def simple_search_es(
     es: ESClient,
     index: str,
@@ -60,16 +69,20 @@ def simple_search_es(
         # Check if query contains wildcards
         has_wildcards = '*' in search_query or '?' in search_query
 
+        # Check if query needs exact phrase matching
+        needs_exact = _needs_exact_phrase_matching(query)
+
         # Build search fields based on options
         search_fields = []
         if options.search_content:
-            search_fields.append("content^1")
+            # Use exact subfield if query contains special characters
+            search_fields.append("content.exact^1" if needs_exact else "content^1")
         if options.search_name:
             search_fields.append("file_name.text^2")
 
         # Fallback: if both disabled somehow, search content
         if not search_fields:
-            search_fields = ["content^1"]
+            search_fields = ["content.exact^1" if needs_exact else "content^1"]
 
         if has_wildcards:
             # Use query_string for wildcard support
@@ -80,6 +93,71 @@ def simple_search_es(
                     "default_operator": "AND"
                 }
             })
+        elif needs_exact:
+            # Use wildcard query on keyword field for exact phrase matching with special chars
+            # Keyword field preserves original text without tokenization
+            # Use bool/should to boost exact case matches higher than case-insensitive matches
+            phrase_queries = []
+            if options.search_content:
+                # Use bool query with case-sensitive (boosted) and case-insensitive (fallback)
+                phrase_queries.append({
+                    "bool": {
+                        "should": [
+                            {
+                                # Exact case match (higher score)
+                                "wildcard": {
+                                    "content.keyword": {
+                                        "value": f"*{search_query}*",
+                                        "boost": 2.0
+                                    }
+                                }
+                            },
+                            {
+                                # Case-insensitive match (lower score)
+                                "wildcard": {
+                                    "content.keyword": {
+                                        "value": f"*{search_query}*",
+                                        "case_insensitive": True,
+                                        "boost": 1.0
+                                    }
+                                }
+                            }
+                        ],
+                        "minimum_should_match": 1
+                    }
+                })
+            if options.search_name:
+                phrase_queries.append({
+                    "bool": {
+                        "should": [
+                            {
+                                # Exact case match (higher score)
+                                "wildcard": {
+                                    "file_path": {
+                                        "value": f"*{search_query}*",
+                                        "boost": 2.0
+                                    }
+                                }
+                            },
+                            {
+                                # Case-insensitive match (lower score)
+                                "wildcard": {
+                                    "file_path": {
+                                        "value": f"*{search_query}*",
+                                        "case_insensitive": True,
+                                        "boost": 1.0
+                                    }
+                                }
+                            }
+                        ],
+                        "minimum_should_match": 1
+                    }
+                })
+            # Combine with OR (should match either content or filename)
+            if len(phrase_queries) > 1:
+                must.append({"bool": {"should": phrase_queries, "minimum_should_match": 1}})
+            else:
+                must.extend(phrase_queries)
         else:
             # Use multi_match for regular queries
             match_query = {
@@ -212,7 +290,10 @@ def simple_search_es(
     for h in hits:
         debug_stats["total_hits"] += 1
         src = h.get("_source", {})
+        # Get highlights from either content or content.exact field
         hl_list = h.get("highlight", {}).get("content", [])
+        if not hl_list:
+            hl_list = h.get("highlight", {}).get("content.exact", [])
         content = src.get("content", "")
 
         # DEBUG: Log highlight fragments
@@ -262,7 +343,7 @@ def simple_search_es(
         # DEBUG: Log match creation results
         if debug_stats["total_hits"] <= 5:
             total_occurrences = sum(line_match_counts.values())
-            print(f"  Created matches: {len(matches)} unique lines ({total_occurrences} total occurrences)")
+            #print(f"  Created matches: {len(matches)} unique lines ({total_occurrences} total occurrences)")
             if line_match_counts:
                 print(f"  Match counts per line: {dict(sorted(line_match_counts.items()))}")
         debug_stats["total_matches"] += len(matches)

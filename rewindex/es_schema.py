@@ -12,6 +12,11 @@ FILES_INDEX_BODY = {
                     "tokenizer": "standard",
                     "filter": ["lowercase", "word_parts", "code_stop"],
                 },
+                "exact_phrase_analyzer": {
+                    "type": "custom",
+                    "tokenizer": "whitespace",
+                    "filter": ["lowercase"],
+                },
             },
             "filter": {
                 "word_parts": {
@@ -40,7 +45,14 @@ FILES_INDEX_BODY = {
                 "analyzer": "code_index_analyzer",
                 "search_analyzer": "code_search_analyzer",
                 "term_vector": "with_positions_offsets",
-                "fields": {"keyword": {"type": "keyword", "ignore_above": 256}},
+                "fields": {
+                    "keyword": {"type": "keyword"},  # No limit for exact phrase matching
+                    "exact": {
+                        "type": "text",
+                        "analyzer": "exact_phrase_analyzer",
+                        "search_analyzer": "exact_phrase_analyzer",
+                    }
+                },
             },
             "file_path": {"type": "keyword"},
             "file_name": {"type": "keyword", "fields": {"text": {"type": "text", "analyzer": "code_index_analyzer", "search_analyzer": "code_search_analyzer"}}},
@@ -83,6 +95,14 @@ VERSIONS_INDEX_BODY = {
                 "analyzer": "code_index_analyzer",
                 "search_analyzer": "code_search_analyzer",
                 "term_vector": "with_positions_offsets",
+                "fields": {
+                    "keyword": {"type": "keyword"},  # No limit for exact phrase matching
+                    "exact": {
+                        "type": "text",
+                        "analyzer": "exact_phrase_analyzer",
+                        "search_analyzer": "exact_phrase_analyzer",
+                    }
+                },
             },
             "language": {"type": "keyword"},
             "project_id": {"type": "keyword"},

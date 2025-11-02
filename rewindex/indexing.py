@@ -69,7 +69,7 @@ def _should_index_file(path: Path, rel_path: str, cfg: Config, debug: bool = Fal
         if debug: print(f"       ❌ File not found")
         return False
 
-    if debug: print(f"       ✅ File should be indexed")
+    #if debug: print(f"       ✅ File should be indexed")
     return True
 
 
