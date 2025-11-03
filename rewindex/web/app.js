@@ -4712,13 +4712,20 @@
           action = 'renamed to ' + data.renamed_to.split('/').pop(); // Show new filename
         }
 
-        // Spawn falling block if in overview mode
-        if(!qEl.value.trim() && resultsOnlyMode && typeof window.spawnFallingFileBlock === 'function'){
-          window.spawnFallingFileBlock({
-            file_path: path,
-            language: data.language || 'text',
-            action: action
-          });
+        // Spawn falling block if in overview mode AND page is visible
+        // Skip block spawning when page is hidden to prevent lag from queued updates
+        const isPageVisible = !document.hidden;
+        if(!qEl.value.trim() && resultsOnlyMode){
+          if(isPageVisible && typeof window.spawnFallingFileBlock === 'function'){
+            window.spawnFallingFileBlock({
+              file_path: path,
+              language: data.language || 'text',
+              action: action
+            });
+          } else if(!isPageVisible){
+            // Track skipped updates while hidden
+            hiddenUpdateCount++;
+          }
         }
 
         if(path){
@@ -4773,6 +4780,32 @@
       }catch(e){ /* ignore */ }
     });
   }catch(e){ /* SSE not supported? */ }
+
+  // Page Visibility API: Clear falling blocks when tab becomes visible
+  // This prevents lag from hundreds of queued blocks when returning to the tab
+  let hiddenUpdateCount = 0;
+  document.addEventListener('visibilitychange', () => {
+    if(!document.hidden){
+      // Page became visible
+      if(hiddenUpdateCount > 0){
+        console.log(`👁️ [visibility] Page visible again. Skipped ${hiddenUpdateCount} falling blocks while hidden.`);
+        hiddenUpdateCount = 0;
+
+        // Clear any lingering blocks to ensure clean state
+        if(typeof window.clearAllFallingBlocks === 'function'){
+          window.clearAllFallingBlocks();
+        }
+
+        // Refresh overview to show current state
+        if(!qEl.value.trim() && resultsOnlyMode){
+          renderCodebaseOverview();
+        }
+      }
+    } else {
+      // Page became hidden
+      console.log('👁️ [visibility] Page hidden. Falling blocks will be skipped.');
+    }
+  });
 
   async function refreshTimeline(){
     if(!sparklineEl) return;
