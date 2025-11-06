@@ -33,6 +33,16 @@ REWINDEX_ES_HOST="remote-es:9200" rewindex search "query"
 This overrides the `elasticsearch.host` setting in `.rewindex.json` for all indexing and search operations.
 
 ### Installation
+
+**End Users (Recommended):**
+```bash
+# One-line install (Linux with Docker + systemd)
+curl -fsSL https://raw.githubusercontent.com/ryanmrestivo/rewindex/main/install.sh | bash
+
+# See INSTALL.md for details
+```
+
+**Developers:**
 ```bash
 # Developer mode (editable install)
 pip install -e .
@@ -40,7 +50,7 @@ pip install -e .
 # Install with TUI support (adds textual + pygments)
 pip install -e ".[tui]"
 
-# Global install with pipx (recommended)
+# Global install with pipx (recommended for CLI use)
 pipx install .
 
 # Global install with TUI support
@@ -48,7 +58,54 @@ pipx install "rewindex[tui]"
 
 # Build wheel/sdist
 python -m build
+
+# Build standalone binary (see BUILD.md for details)
+pip install -e ".[build,tui]"
+./build-binary.sh --clean --tui
+# Output: dist/rewindex-server (standalone executable)
 ```
+
+### Building Standalone Binaries
+
+Rewindex can be packaged as a standalone executable using PyInstaller:
+
+```bash
+# Install build dependencies
+pip install -e ".[build]"
+
+# Build server binary (includes CLI + web server)
+./build-binary.sh
+
+# Build with TUI support (requires textual + pygments)
+./build-binary.sh --tui
+
+# Clean build (removes previous artifacts)
+./build-binary.sh --clean
+```
+
+**Output:** `dist/rewindex-server` (~50-80 MB standalone binary)
+
+**Distribution:**
+- No Python installation required
+- Includes all dependencies (watchdog, optionally textual/pygments)
+- Bundles web UI assets (HTML, CSS, JS)
+- Works on Linux, macOS, Windows (platform-specific builds)
+
+**Usage:**
+```bash
+# Install system-wide
+sudo cp dist/rewindex-server /usr/local/bin/
+
+# Or user-local
+cp dist/rewindex-server ~/.local/bin/
+
+# Run exactly like the rewindex command
+rewindex-server serve --host 127.0.0.1 --port 8899
+rewindex-server search "query"
+rewindex-server tui
+```
+
+See **BUILD.md** for complete documentation on building, distributing, and troubleshooting.
 
 ### Common Development Workflow
 ```bash

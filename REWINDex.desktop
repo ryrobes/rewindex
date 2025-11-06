@@ -1,0 +1,9 @@
+[Desktop Entry]
+Version=1.0
+Name=REWINDex
+Comment=REWINDex
+Exec=omarchy-launch-webapp http://localhost:8899/ui
+Terminal=false
+Type=Application
+Icon=/home/ryanr/repos/rewindex/web/logo.png
+StartupNotify=true

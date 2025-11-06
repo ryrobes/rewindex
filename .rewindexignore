@@ -1,0 +1,125 @@
+# .rewindexignore - Patterns to exclude from rewindex watching/indexing
+# Uses .gitignore syntax (glob patterns, comments with #)
+
+.config/zed/**
+.config/fcitx5/**
+**/fcitx*/**
+**/mise/**
+*.crdownload
+**/*.crdownload
+.codex/**
+.config/obsidian/**
+Obsidian/**
+**/.obsidian/**
+**/*.pid
+**/*.tmp.*
+**.tmp.**
+**/cache/**
+**/.bundle/**
+.bundle/**
+.config/omarchy/current/**
+.local/state/**
+.config/dconf/**
+.local/state/wireplumber/**
+.local/share/gvfs-metadata/**
+**/.vscode/**
+.vscode/**
+**/*.tmp.*
+**/target/uberjar/classes/**
+**/.parquet-cache/**
+**/target/classes/**
+**/.lein-git-deps/**
+**/.download-cache/**
+**/rabbitsql/console_logs/**
+**/rabbitsql/console-logs/**
+**/flow-history/**
+.npm/**
+.claude/**
+.claude-debug/**
+.config/Code/Backups
+.config/Code/**
+**/.git/**
+**/.gitlibs/**
+.clj-kondo
+**/.clj-kondo/**
+.cache/**
+**/.cache/**
+**/site-packages/**
+**/Steam/**
+**/venv/**
+**/mise/**
+mise
+.m2/**
+.m2
+**/.gitlibs/**
+.gitlibs/**
+**/cljs-runtime/**
+**/.shadow-cljs/**
+**/*node_modules/**
+**/flow-logs/**
+**/flows/builds/**
+.claude*
+**/.claude*
+
+
+
+
+
+.claude.json.backup
+
+# Browser caches (massive thrashing!)
+.cache/**
+.config/google-chrome/**
+.config/BraveSoftware/**
+.config/chromium/**
+.mozilla/**
+.config/Code/Cache/**
+.config/Code/CachedData/**
+
+# Application caches
+.local/share/Trash/**
+.local/share/baloo/**
+.local/share/Steam/**
+.steam/**
+snap/**
+.config/*/GPUCache/**
+.config/*/DawnWebGPUCache/**
+.config/*/DawnGraphiteCache/**
+
+# Python artifacts
+**/__pycache__/**
+**/*.pyc
+**/*.pyo
+**/.pytest_cache/**
+**/.tox/**
+
+# Node/JS
+**/node_modules/**
+
+# Build artifacts
+**/dist/**
+**/build/**
+**/.venv/**
+**/venv/**
+
+# Temp files
+**/*.tmp
+**/*.swp
+**/*.swx
+**/*~
+
+# Media files
+**/*.mp4
+**/*.mkv
+**/*.avi
+**/*.mov
+
+# Large binary files
+**/*.iso
+**/*.dmg
+**/*.img
+
+# Add your custom patterns below:
+# Downloads/**
+# Documents/large-dataset/**
+repos/rewindex/build/

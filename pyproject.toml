@@ -18,6 +18,9 @@ tui = [
   "textual>=0.47.0",
   "pygments>=2.17.0",
 ]
+build = [
+  "pyinstaller>=6.0.0",
+]
 
 [project.scripts]
 rewindex = "rewindex.cli:main"

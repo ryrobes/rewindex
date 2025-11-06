@@ -1,0 +1,147 @@
+name: Build and Release Binaries
+
+on:
+  release:
+    types: [created]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to build (e.g., v0.1.0)'
+        required: true
+        type: string
+
+jobs:
+  build-linux:
+    name: Build Linux Binary
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        arch: [x86_64, aarch64]
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Install dependencies
+      run: |
+        pip install --upgrade pip
+        pip install -e ".[build,tui]"
+
+    - name: Build binary
+      run: |
+        ./build-binary.sh --clean --tui
+
+    - name: Rename binary
+      run: |
+        mv dist/rewindex-server dist/rewindex-server-Linux-${{ matrix.arch }}
+
+    - name: Test binary
+      run: |
+        dist/rewindex-server-Linux-${{ matrix.arch }} --help
+
+    - name: Upload binary
+      uses: actions/upload-artifact@v4
+      with:
+        name: rewindex-server-Linux-${{ matrix.arch }}
+        path: dist/rewindex-server-Linux-${{ matrix.arch }}
+        retention-days: 1
+
+    - name: Upload to release
+      if: github.event_name == 'release'
+      uses: actions/upload-release-asset@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ github.event.release.upload_url }}
+        asset_path: dist/rewindex-server-Linux-${{ matrix.arch }}
+        asset_name: rewindex-server-Linux-${{ matrix.arch }}
+        asset_content_type: application/octet-stream
+
+  build-macos:
+    name: Build macOS Binary
+    runs-on: macos-latest
+    strategy:
+      matrix:
+        arch: [x86_64, arm64]
+        include:
+          - arch: x86_64
+            target: x86_64-apple-darwin
+          - arch: arm64
+            target: arm64-apple-darwin
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Install dependencies
+      run: |
+        pip install --upgrade pip
+        pip install -e ".[build,tui]"
+
+    - name: Build binary
+      run: |
+        ./build-binary.sh --clean --tui
+
+    - name: Rename binary
+      run: |
+        mv dist/rewindex-server dist/rewindex-server-Darwin-${{ matrix.arch }}
+
+    - name: Test binary
+      run: |
+        dist/rewindex-server-Darwin-${{ matrix.arch }} --help
+
+    - name: Upload binary
+      uses: actions/upload-artifact@v4
+      with:
+        name: rewindex-server-Darwin-${{ matrix.arch }}
+        path: dist/rewindex-server-Darwin-${{ matrix.arch }}
+        retention-days: 1
+
+    - name: Upload to release
+      if: github.event_name == 'release'
+      uses: actions/upload-release-asset@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ github.event.release.upload_url }}
+        asset_path: dist/rewindex-server-Darwin-${{ matrix.arch }}
+        asset_name: rewindex-server-Darwin-${{ matrix.arch }}
+        asset_content_type: application/octet-stream
+
+  create-checksums:
+    name: Create Checksums
+    needs: [build-linux, build-macos]
+    runs-on: ubuntu-latest
+    if: github.event_name == 'release'
+
+    steps:
+    - name: Download all artifacts
+      uses: actions/download-artifact@v4
+      with:
+        path: binaries/
+
+    - name: Create checksums
+      run: |
+        cd binaries
+        find . -type f -name "rewindex-server-*" -exec sha256sum {} \; > SHA256SUMS
+        cat SHA256SUMS
+
+    - name: Upload checksums
+      uses: actions/upload-release-asset@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ github.event.release.upload_url }}
+        asset_path: binaries/SHA256SUMS
+        asset_name: SHA256SUMS
+        asset_content_type: text/plain
