@@ -6,6 +6,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Rewindex</title>
   <link rel="stylesheet" href="/static/styles.css" />
+  <link rel="stylesheet" href="/static/list-view.css" />
 
   <!-- Load Matter.js and Muuri.js FIRST, before Monaco's RequireJS loader -->
   <script src="https://cdn.jsdelivr.net/npm/matter-js@0.19.0/build/matter.min.js"></script>
@@ -68,6 +69,7 @@
         
         <div class="control-buttons">
           <!-- <button id="resultsOnly" class="btn-toggle-small active" title="Show only search results (default)">Results Only</button> -->
+          <button id="listViewMode" class="btn-toggle-small" title="Toggle List View (Norton Commander style)">List View</button>
           <button id="treemapMode" class="btn-toggle-small">Treemap</button>
           <button id="treemapFolders" class="btn-toggle-small sub-toggle" style="display:none;">Folders</button>
           <!-- Bytes toggle removed - now always uses bytes by default -->
@@ -142,6 +144,29 @@
 
     <div id="canvas"></div>
 
+    <!-- List View Container (Norton Commander style) -->
+    <div id="listViewContainer" style="display: none;">
+      <div id="fileGrid" class="file-grid"></div>
+      <div id="previewPanel" class="preview-panel">
+        <div class="preview-header">
+          <span id="previewFileName" class="preview-file-name">Select a file to preview</span>
+          <div class="preview-controls">
+            <button id="previewEdit" class="btn tiny" title="Edit" style="display:none;">✎</button>
+            <button id="previewDownload" class="btn tiny" title="Download" style="display:none;">⬇</button>
+          </div>
+        </div>
+        <div id="previewContent" class="preview-content">
+          <div class="preview-placeholder">
+            <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" opacity="0.3">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+              <polyline points="14 2 14 8 20 8"/>
+            </svg>
+            <p>No file selected</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- Physics canvas for falling files (overlay) -->
     <canvas id="physicsCanvas" style="position: fixed; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 5;"></canvas>
   </div>
@@ -212,6 +237,7 @@
     });
   </script>
   <script src="/static/app.js"></script>
+  <script src="/static/list-view.js"></script>
 </body>
 
 </html>

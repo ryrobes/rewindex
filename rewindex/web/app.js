@@ -372,6 +372,8 @@
   applyTransform();
 
   workspace.addEventListener('wheel', (e)=>{
+    // Skip canvas pan/zoom when list view is active
+    if(window.ListView && window.ListView.isActive()) return;
     // Ignore zooming when interacting with search bar
     if(e.target.closest('#searchBar')) return;
     e.preventDefault();
@@ -392,6 +394,8 @@
   }, {passive:false});
 
   workspace.addEventListener('pointerdown', (e)=>{
+    // Skip canvas pan/drag when list view is active
+    if(window.ListView && window.ListView.isActive()) return;
     // cancel any animation
     isAnimating = false;
     if(animHandle) cancelAnimationFrame(animHandle);
@@ -406,12 +410,16 @@
     workspace.setPointerCapture(e.pointerId);
   });
   workspace.addEventListener('pointermove', (e)=>{
+    // Skip canvas pan/drag when list view is active
+    if(window.ListView && window.ListView.isActive()) return;
     if(!dragging) return;
     offsetX = e.clientX - dragStart[0];
     offsetY = e.clientY - dragStart[1];
     applyTransform();
   });
-  workspace.addEventListener('pointerup', ()=>{
+  workspace.addEventListener('pointerup', (e)=>{
+    // Skip canvas pan/drag when list view is active
+    if(window.ListView && window.ListView.isActive()) return;
     dragging = false;
   });
 
@@ -507,6 +515,7 @@
 
       // Clear search results
       lastSearchResults = [];
+      window.lastSearchResults = []; // Also update window reference for List View
       timelineFilePaths = []; // Also clear timeline file paths
 
       // Clear results header (match count display)
@@ -620,6 +629,7 @@
 
     // Store search results for results-only mode
     lastSearchResults = displayResults;
+    window.lastSearchResults = displayResults; // Also update window reference for List View
 
     // Store timeline file paths (base query without time filter)
     // IMPORTANT: Only update timeline paths when NOT time-traveling
@@ -647,6 +657,13 @@
     // SHOW ALL MODE: Render results and apply dimming to non-matches
     else {
       renderResults(displayResults, res.total||0, false, results.length);
+    }
+
+    // Notify List View of new search results
+    if(window.ListView){
+      window.dispatchEvent(new CustomEvent('searchResultsReady', {
+        detail: { results: displayResults, total: res.total||0 }
+      }));
     }
 
     // Trigger filter panel updates (they need to re-compute based on new primary results)
@@ -2303,6 +2320,13 @@
   const fileFolder = new Map(); // path -> folderPath
   const fileLanguages = new Map(); // path -> language
   const fileMeta = new Map(); // path -> {size_bytes, line_count}
+
+  // Expose tileContent to global scope for List View integration
+  window.tileContent = tileContent;
+  // Expose refreshAllTiles for List View integration (to re-render canvas when switching back)
+  window.refreshAllTiles = refreshAllTiles;
+  // Expose lastSearchResults for List View integration (to populate on toggle)
+  window.lastSearchResults = lastSearchResults;
   const toasts = document.getElementById('toasts');
   let nextX = 0;
   let nextY = 0;
@@ -5296,6 +5320,12 @@
   // applyScrub removed - timeline click now handles time selection directly
 
   async function refreshAllTiles(ts){
+    // Skip tile rendering if list view is active
+    if(window.ListView && window.ListView.isActive()){
+      console.log('⏭️  [refreshAllTiles] SKIPPED - List View active');
+      return;
+    }
+
     const perfStart = performance.now();
     console.log('🔄 [refreshAllTiles] START', {
       timestamp: ts,
@@ -5928,9 +5958,18 @@
       path: r.file_path,
       hasContent: tileContent.has(r.file_path),
       totalTiles: tiles.size,
-      totalContent: tileContent.size
+      totalContent: tileContent.size,
+      listViewActive: window.ListView && window.ListView.isActive()
     });
 
+    // If list view is active, route click to list view instead of canvas
+    if(window.ListView && window.ListView.isActive()){
+      console.log('  → Routing to List View');
+      window.ListView.selectFileByPath(r.file_path);
+      return;
+    }
+
+    // Otherwise, normal canvas behavior
     const path = r.file_path;
     const line = (r.matches && r.matches[0] && r.matches[0].line) || null;
     const query = qEl.value.trim(); // Get current search query
@@ -5964,6 +6003,20 @@
   }
 
   function focusLine(path, line, token){
+    console.log('📍 [focusLine] CLICK', {
+      path,
+      line,
+      listViewActive: window.ListView && window.ListView.isActive()
+    });
+
+    // If list view is active, route click to list view instead of canvas
+    if(window.ListView && window.ListView.isActive()){
+      console.log('  → Routing to List View');
+      window.ListView.selectFileByPath(path);
+      return;
+    }
+
+    // Otherwise, normal canvas behavior
     const query = token || qEl.value.trim(); // Use token or current search query
     openTile(path).then(async ()=>{
       centerOnTile(path);
@@ -6403,6 +6456,12 @@
 
   async function spawnAll(){
     try{
+      // Skip tile spawning if list view is active
+      if(window.ListView && window.ListView.isActive()){
+        console.log('⏭️  [spawnAll] SKIPPED - List View active');
+        return;
+      }
+
       // RESULTS-ONLY MODE: Show codebase overview on initial load
       if(resultsOnlyMode){
         console.log('📋 [spawnAll] Results-only mode: Showing codebase overview');
@@ -6722,9 +6781,10 @@
     root.style.setProperty('--accent-opaque', hexToRgba(accentColor, 0.8));
 
     // Apply font
-    if(font && font.family){
+    //if(font){
+      console.log('[theme] Applying system font:', font);
       applySystemFont(font);
-    }
+    //}
 
     // Apply syntax highlighting colors
     if(syntaxColors && Object.keys(syntaxColors).length > 0){
@@ -7072,7 +7132,10 @@
     // Apply to CSS variables
     const root = document.documentElement;
     root.style.setProperty('--font-mono', monoFamily);
-    root.style.setProperty('--font-sans', sansFamily);
+    //root.style.setProperty('--font-sans', sansFamily);
+    root.style.setProperty('--font-sans', monoFamily);
+
+    console.log(' [theme] --font-mono', monoFamily, ' --font-sans', sansFamily);
 
     // Inject global font CSS
     let styleId = 'omarchy-font-theme';

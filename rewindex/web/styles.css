@@ -20,7 +20,8 @@
 
   /* Font families - defaults, overridden by Omarchy theme */
   --font-mono: 'Fira Code', 'Cascadia Code', 'JetBrains Mono', 'Berkeley Mono', 'Consolas', monospace;
-  --font-sans: 'Quicksand', 'Inter', 'Segoe UI', 'Roboto', 'Helvetica Neue', sans-serif;
+  /* --font-sans: 'Quicksand', 'Inter', 'Segoe UI', 'Roboto', 'Helvetica Neue', sans-serif; */
+  --font-sans: 'Fira Code', 'Cascadia Code', 'JetBrains Mono', 'Berkeley Mono', 'Consolas', monospace;
 }
 
 html,

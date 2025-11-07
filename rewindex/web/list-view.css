@@ -1,0 +1,411 @@
+/* =====================================================
+   LIST VIEW MODE - Norton Commander Style
+   ===================================================== */
+
+/* List View Container - Takes over from canvas */
+#listViewContainer {
+  position: absolute;
+  left: 435px; /* After sidebar (matching workspace left position) */
+  top: 92px; /* Below search bar */
+  right: 0;
+  bottom: 0;
+  display: flex;
+  gap: 0;
+  overflow: hidden;
+  background: transparent; /* Semi-transparent to show canvas background */
+  z-index: 1;
+}
+
+/* File Grid - Left/Center area */
+.file-grid {
+  flex: 1;
+  min-width: 400px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  background: rgba(13, 17, 23, 0.35); /* Semi-transparent dark background */
+  backdrop-filter: blur(10px) brightness(90%);
+  border-right: 2px solid var(--border);
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/* File Grid Item - Each row */
+.file-grid-item {
+  display: grid;
+  grid-template-columns: 24px minmax(200px, 1fr) 80px 80px 120px 60px;
+  gap: 12px;
+  align-items: center;
+  padding: 8px 12px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  font-family: var(--font-sans), sans-serif;
+  font-size: 13px;
+}
+
+.file-grid-item:hover {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.15);
+  transform: translateX(2px);
+}
+
+.file-grid-item.selected {
+  background: rgba(var(--accent-rgb), 0.15);
+  border-color: var(--accent);
+  box-shadow: 0 0 12px rgba(var(--accent-rgb), 0.2);
+}
+
+.file-grid-item.secondary-match {
+  box-shadow: 0 0 15px rgba(255, 215, 0, 0.4);
+  border-color: rgba(255, 215, 0, 0.5);
+}
+
+/* Grid Item Components */
+.file-grid-item .lang-icon {
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  flex-shrink: 0;
+}
+
+.file-grid-item .file-path {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+  font-family: var(--font-mono), monospace;
+  font-size: 12px;
+}
+
+.file-grid-item .file-path .file-name {
+  font-weight: 600;
+  color: var(--accent);
+}
+
+.file-grid-item .file-size {
+  text-align: right;
+  color: var(--text);
+  opacity: 0.6;
+  font-family: var(--font-mono), monospace;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.file-grid-item .file-lines {
+  text-align: right;
+  color: var(--text);
+  opacity: 0.6;
+  font-family: var(--font-mono), monospace;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.file-grid-item .file-updated {
+  color: var(--text);
+  opacity: 0.5;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.file-grid-item .file-actions {
+  display: flex;
+  gap: 4px;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+
+.file-grid-item:hover .file-actions {
+  opacity: 1;
+}
+
+.file-grid-item .file-actions .btn {
+  padding: 2px 6px;
+  font-size: 12px;
+  min-width: unset;
+}
+
+/* Match Indicator */
+.file-grid-item .match-count {
+  display: inline-block;
+  background: var(--accent);
+  color: var(--bg);
+  padding: 2px 6px;
+  border-radius: 10px;
+  font-size: 10px;
+  font-weight: 700;
+  margin-left: 8px;
+}
+
+/* Preview Panel - Right side */
+.preview-panel {
+  width: 600px;
+  min-width: 400px;
+  max-width: 50%;
+  display: flex;
+  flex-direction: column;
+  background: rgba(13, 17, 23, 0.90); /* Semi-transparent dark background */
+  backdrop-filter: blur(12px) brightness(85%);
+  border-left: 2px solid var(--border);
+  overflow: hidden;
+  position: relative;
+}
+
+/* Preview Header */
+.preview-header {
+  padding: 12px 16px;
+  background: rgba(255, 255, 255, 0.03);
+  backdrop-filter: blur(8px);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.preview-file-name {
+  font-family: var(--font-mono), monospace;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--accent);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.preview-controls {
+  display: flex;
+  gap: 6px;
+}
+
+/* Preview Content */
+.preview-content {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: auto;
+  padding: 16px;
+  background: transparent; /* Inherit from parent */
+  font-family: var(--font-mono), monospace;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.preview-content pre {
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  border: none;
+  overflow: visible;
+}
+
+.preview-content code {
+  font-family: var(--font-mono), monospace;
+  font-size: 12px;
+  background: transparent;
+}
+
+/* Prism.js Line Numbers in Preview */
+.preview-content pre.line-numbers {
+  padding-left: 3em;
+}
+
+.preview-content .line-numbers-rows {
+  border-right: 1px solid var(--border);
+  opacity: 0.5;
+}
+
+/* Preview Placeholder */
+.preview-placeholder {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: var(--text);
+  opacity: 0.4;
+  gap: 16px;
+}
+
+.preview-placeholder p {
+  font-size: 14px;
+  font-family: var(--font-sans), sans-serif;
+  margin: 0;
+}
+
+/* Match Highlights in Preview */
+.preview-content mark,
+.preview-content .highlight {
+  background: rgba(255, 215, 0, 0.3);
+  color: inherit;
+  padding: 2px 0;
+  border-radius: 2px;
+  font-weight: 600;
+}
+
+/* Resize Handle for Preview Panel */
+.preview-panel-resizer {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 4px;
+  height: 100%;
+  background: transparent;
+  cursor: col-resize;
+  z-index: 10;
+  transition: background 0.15s ease;
+}
+
+.preview-panel-resizer:hover {
+  background: var(--accent-strong);
+}
+
+.preview-panel-resizer.resizing {
+  background: var(--accent-opaque);
+}
+
+/* Adjust for Secondary Filter Panel */
+body.secondary-filter-active #listViewContainer {
+  /* Adjust when secondary filter is active - leave room for secondary sidebar */
+  right: 340px;
+}
+
+/* Scrollbar Styling for File Grid */
+.file-grid::-webkit-scrollbar {
+  width: 10px;
+}
+
+.file-grid::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.2);
+}
+
+.file-grid::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 5px;
+}
+
+.file-grid::-webkit-scrollbar-thumb:hover {
+  background: var(--accent);
+}
+
+/* Preview Content Scrollbar */
+.preview-content::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+.preview-content::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.2);
+}
+
+.preview-content::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 5px;
+}
+
+.preview-content::-webkit-scrollbar-thumb:hover {
+  background: var(--accent);
+}
+
+/* Binary File Preview */
+.preview-content .binary-preview {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  padding: 32px;
+}
+
+.preview-content .binary-preview img {
+  max-width: 100%;
+  max-height: 60vh;
+  object-fit: contain;
+  border-radius: 4px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+}
+
+.preview-content .binary-preview .binary-info {
+  text-align: center;
+  opacity: 0.6;
+}
+
+/* Loading State */
+.preview-content .loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  opacity: 0.5;
+}
+
+.preview-content .loading::after {
+  content: "Loading...";
+  font-size: 14px;
+  animation: pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 0.3; }
+  50% { opacity: 1; }
+}
+
+/* Responsive adjustments */
+@media (max-width: 1200px) {
+  .file-grid-item {
+    grid-template-columns: 24px minmax(150px, 1fr) 70px 100px 50px;
+    gap: 8px;
+    font-size: 12px;
+  }
+
+  .file-grid-item .file-updated {
+    display: none;
+  }
+
+  .preview-panel {
+    width: 400px;
+    min-width: 300px;
+  }
+}
+
+@media (max-width: 900px) {
+  .preview-panel {
+    display: none; /* Hide preview on small screens */
+  }
+
+  .file-grid {
+    border-right: none;
+  }
+}
+
+/* Alternative: Compact Grid View */
+.file-grid.compact .file-grid-item {
+  padding: 6px 10px;
+  font-size: 12px;
+}
+
+.file-grid.compact .file-grid-item .lang-icon {
+  width: 20px;
+  height: 20px;
+  font-size: 14px;
+}
+
+/* Dark Mode Adjustments */
+@media (prefers-color-scheme: light) {
+  .file-grid-item {
+    background: rgba(0, 0, 0, 0.02);
+  }
+
+  .file-grid-item:hover {
+    background: rgba(0, 0, 0, 0.05);
+  }
+
+  .preview-header {
+    background: rgba(0, 0, 0, 0.02);
+  }
+}
