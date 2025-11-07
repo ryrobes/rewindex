@@ -79,6 +79,11 @@
       canvasEl.style.zIndex = '-1'; // Move canvas behind everything
       listViewContainer.style.display = 'flex';
 
+      // Update container position based on existing filter panels
+      if(window.filterPanels){
+        updateContainerPosition(window.filterPanels.length);
+      }
+
       // Get current search results from app.js if available
       if(window.lastSearchResults && window.lastSearchResults.length > 0){
         console.log('[List View] Found existing search results:', window.lastSearchResults.length);
@@ -625,12 +630,25 @@
     }
   }
 
+  // Update container position to make room for filter panels
+  function updateContainerPosition(filterPanelCount = 0){
+    if(!listViewMode) return;
+
+    const SIDEBAR_WIDTH = 435;
+    const FILTER_PANEL_WIDTH = 360; // Width of each filter panel
+    const leftOffset = SIDEBAR_WIDTH + (filterPanelCount * FILTER_PANEL_WIDTH);
+
+    listViewContainer.style.left = `${leftOffset}px`;
+    console.log('[List View] Updated container position: left =', leftOffset);
+  }
+
   // Expose functions to global scope for integration
   window.ListView = {
     init,
     toggleListView,
     renderFileGrid,
     selectFileByPath,
+    updateContainerPosition,
     isActive: () => listViewMode,
     updateResults: (results) => {
       currentSearchResults = results;

@@ -106,8 +106,8 @@ body {
 /* Filter Panels Container - holds dynamically created filter panels */
 #filterPanelsContainer {
   position: fixed;
-  left: 435px; 
-  
+  left: 435px;
+
   top: 0;
   bottom: 0;
   z-index: 98;

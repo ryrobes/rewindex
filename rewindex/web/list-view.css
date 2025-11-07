@@ -18,6 +18,7 @@
 
 /* File Grid - Left/Center area */
 .file-grid {
+  display: none; /* Hidden - we only need the preview panel */
   flex: 1;
   min-width: 400px;
   overflow-y: auto;
@@ -26,7 +27,6 @@
   backdrop-filter: blur(10px) brightness(90%);
   border-right: 2px solid var(--border);
   padding: 8px;
-  display: flex;
   flex-direction: column;
   gap: 2px;
 }
@@ -36,7 +36,7 @@
   display: grid;
   grid-template-columns: 24px minmax(200px, 1fr) 80px 80px 120px 60px;
   gap: 12px;
-  align-items: center;
+  align-items: start;
   padding: 8px 12px;
   background: rgba(255, 255, 255, 0.04);
   border: 1px solid rgba(255, 255, 255, 0.05);
@@ -76,12 +76,12 @@
 }
 
 .file-grid-item .file-path {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
   color: var(--text);
   font-family: var(--font-mono), monospace;
-  font-size: 12px;
+  font-size: 10px;
+  line-height: 1.4;
+  word-break: break-all;
+  overflow-wrap: break-word;
 }
 
 .file-grid-item .file-path .file-name {
@@ -145,9 +145,7 @@
 
 /* Preview Panel - Right side */
 .preview-panel {
-  width: 600px;
-  min-width: 400px;
-  max-width: 50%;
+  flex: 1; /* Fill entire available space */
   display: flex;
   flex-direction: column;
   background: rgba(13, 17, 23, 0.90); /* Semi-transparent dark background */

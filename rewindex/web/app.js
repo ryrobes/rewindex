@@ -1230,8 +1230,6 @@
     const container = document.getElementById('filterPanelsContainer');
     container.appendChild(panel);
 
-    // Hide previous panel's nub (if any) since this panel is now the last one
-    // Note: filterPanels.length is now >= 1 since we just pushed
     // Animate in
     requestAnimationFrame(() => {
       panel.classList.remove('animating-in');
@@ -1250,7 +1248,6 @@
     });
     fuzzyBtn.onclick = () => toggleFilterOption(panelId, 'fuzzy');
     partialBtn.onclick = () => toggleFilterOption(panelId, 'partial');
-    nub.onclick = () => addFilterPanel();
 
     // Update workspace positioning
     updateWorkspacePosition();
@@ -1457,13 +1454,15 @@
     countDiv.textContent = `${matchCount} matches in ${fileCount} files`;
     resultsHeader.appendChild(countDiv);
 
-    // Add chevron button to add another filter panel
-    const addFilterBtn = document.createElement('button');
-    addFilterBtn.className = 'add-filter-btn';
-    addFilterBtn.innerHTML = '›';
-    addFilterBtn.title = 'Add another filter panel';
-    addFilterBtn.onclick = () => addFilterPanel();
-    resultsHeader.appendChild(addFilterBtn);
+    // Add chevron button to add another filter panel (if not at max)
+    if(filterPanels.length < MAX_FILTER_PANELS){
+      const addFilterBtn = document.createElement('button');
+      addFilterBtn.className = 'add-filter-btn';
+      addFilterBtn.innerHTML = '›';
+      addFilterBtn.title = 'Add another filter panel';
+      addFilterBtn.onclick = () => addFilterPanel();
+      resultsHeader.appendChild(addFilterBtn);
+    }
 
     // Results list: per-file group with per-match lines (same as primary)
     results.forEach((r, idx) => {
@@ -1646,6 +1645,11 @@
   function updateWorkspacePosition(){
     // Workspace now stays at left: 0 (renders under sidebar and panels)
     // No need to update its position
+
+    // Update list view container position if list view is active
+    if(window.ListView && window.ListView.isActive()){
+      window.ListView.updateContainerPosition(filterPanels.length);
+    }
 
     // const workspace = document.getElementById('workspace');
     // const sidebar = document.getElementById('sidebar');
@@ -2329,6 +2333,8 @@
   window.lastSearchResults = lastSearchResults;
   // Expose openOverlayEditor for List View EDIT button
   window.openOverlayEditor = openOverlayEditor;
+  // Expose filterPanels for List View to adjust position
+  window.filterPanels = filterPanels;
   const toasts = document.getElementById('toasts');
   let nextX = 0;
   let nextY = 0;
