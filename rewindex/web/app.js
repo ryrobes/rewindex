@@ -2335,6 +2335,8 @@
   window.openOverlayEditor = openOverlayEditor;
   // Expose filterPanels for List View to adjust position
   window.filterPanels = filterPanels;
+  // Expose doSearch for List View to rerun query when switching back to canvas
+  window.doSearch = doSearch;
   const toasts = document.getElementById('toasts');
   let nextX = 0;
   let nextY = 0;
@@ -2425,7 +2427,7 @@
     }
     const title = document.createElement('div');
     title.className = 'title';
-    title.innerHTML = `<span>${path}</span><span class="right"><button class="btn tiny editbtn" title="Edit" style="display:none;">✎</button><button class="btn tiny dlbtn" title="Download" style="display:none;">⬇</button><span class="lang"></span><span class="updated"></span></span>`;
+    title.innerHTML = `<span>${path}</span><span class="right"><button class="btn tiny editbtn" title="Edit" style="display:none;border:none;">✎</button><button class="btn tiny dlbtn" title="Download" style="display:none;">⬇</button><span class="lang"></span><span class="updated"></span></span>`;
 
     // Dynamic header font size based on tile height (for treemap mode)
     if(pos.h){

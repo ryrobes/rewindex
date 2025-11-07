@@ -98,9 +98,9 @@
         </div>
 
         <div class="search-toggles">
-          <button id="contentToggle" class="toggle-btn active" title="Search file contents" style="font-size: 11px; font-weight: 700; margin-top: -3px;">content</button>
-          <button id="nameToggle" class="toggle-btn active" title="Search file names" style="font-size: 11px; font-weight: 700; margin-top: -3px;">name</button>
-          <button id="binaryToggle" class="toggle-btn active" title="Include binary files" style="font-size: 11px; font-weight: 700; margin-top: -3px;">binary</button>
+          <button id="contentToggle" class="toggle-btn active" title="Search file contents" style="font-size: 11px; font-weight: 700; margin-top: -3px;">C</button>
+          <button id="nameToggle" class="toggle-btn active" title="Search file names" style="font-size: 11px; font-weight: 700; margin-top: -3px;">N</button>
+          <button id="binaryToggle" class="toggle-btn active" title="Include binary files" style="font-size: 11px; font-weight: 700; margin-top: -3px;">B</button>
           <button id="partialToggle" class="toggle-btn" title="Partial match"  style="font-size: 20px; margin-top: 3px; font-weight: 700;">*</button>
           <button id="fuzzyToggle" class="toggle-btn" title="Fuzzy search">~</button>
           <button id="deletedToggle" class="toggle-btn" title="Show deleted" style="font-size: 10px;">🗑</button>
@@ -121,17 +121,19 @@
           <!-- <label class="filter-label">Exclude:</label> -->
           <input id="pathExclude" class="filter-input" type="text" placeholder="exclude: e.g., *.min.js, node_modules/**" autocomplete="off" spellcheck="false" />
         </div>
-
-        <div class="asof-status">
-          <span id="asofLabel" class="asof-label">Live</span>
-        </div>
       </div>
+      
+          <div class="asof-status">
+            <span id="asofLabel" class="asof-label">Live</span>
+          </div>
 
       <!-- Row 2: Full-width timeline -->
       <div class="search-bar-timeline-row">
         <div id="sparkline" class="sparkline-full">
           <div id="sparkTick" class="tick cur"></div>
           <div id="sparkHover" class="tick hover" style="display:none;"></div>
+          <!-- Time status overlaid on sparkline -->
+
         </div>
         <button id="goLive" class="go-live-btn" title="Go Live">
           <svg width="20" height="20" viewBox="0 0 20 20" fill="none">

@@ -109,9 +109,14 @@
       selectedFilePath = null;
       clearPreview();
 
-      // Re-render canvas tiles (they were skipped while list view was active)
-      console.log('🔀 [List View] Switched to Canvas View - triggering tile refresh');
-      if(window.refreshAllTiles){
+      // Rerun the search query to reload all content
+      console.log('🔀 [List View] Switched to Canvas View - rerunning search query');
+      if(window.doSearch){
+        window.doSearch().catch(err => {
+          console.error('[List View] Failed to rerun search:', err);
+        });
+      } else if(window.refreshAllTiles){
+        // Fallback: just refresh tiles if doSearch not available
         window.refreshAllTiles(null).catch(err => {
           console.error('[List View] Failed to refresh tiles:', err);
         });

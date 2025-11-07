@@ -148,9 +148,9 @@
   flex: 1; /* Fill entire available space */
   display: flex;
   flex-direction: column;
-  background: rgba(13, 17, 23, 0.90); /* Semi-transparent dark background */
+  background: rgba(13, 17, 23, 0.450); /* Semi-transparent dark background */
   backdrop-filter: blur(12px) brightness(85%);
-  border-left: 2px solid var(--border);
+  border-left: 0px solid var(--border);
   overflow: hidden;
   position: relative;
 }
@@ -158,9 +158,9 @@
 /* Preview Header */
 .preview-header {
   padding: 12px 16px;
-  background: rgba(255, 255, 255, 0.03);
+  background: rgba(255, 255, 255, 0.0);
   backdrop-filter: blur(8px);
-  border-bottom: 1px solid var(--border);
+  border-bottom: 0px solid var(--border);
   display: flex;
   justify-content: space-between;
   align-items: center;

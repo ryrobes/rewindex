@@ -847,23 +847,32 @@ body {
   font-size: 15px;
 }
 
-/* Time status - fixed width to prevent jitter */
+/* Time status - overlaid on sparkline */
 .asof-status {
-  display: flex;
-  align-items: center;
-  flex-shrink: 0;
+  position: fixed;
+  top: 32px;
+  right: 4px;
+
+  align-items: right;
+  z-index: 6500;
+  pointer-events: none;
 }
 
 .asof-label {
   font-size: 11px;
   color: var(--accent);
   font-weight: 600;
+  
   padding: 4px 8px;
-  /* background: rgba(0, 0, 0, 0.3); */
+  background: rgba(0, 0, 0, 0.0);
+  backdrop-filter: blur(8px);
+  border: 0px solid rgba(255, 255, 255, 0.15);
   border-radius: 3px;
   white-space: nowrap;
-  min-width: 160px; /* Fixed width to prevent layout jitter */
+  
   text-align: center;
+  
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
 }
 
 /* Row 2: Full-width timeline */
