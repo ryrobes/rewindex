@@ -2327,6 +2327,8 @@
   window.refreshAllTiles = refreshAllTiles;
   // Expose lastSearchResults for List View integration (to populate on toggle)
   window.lastSearchResults = lastSearchResults;
+  // Expose openOverlayEditor for List View EDIT button
+  window.openOverlayEditor = openOverlayEditor;
   const toasts = document.getElementById('toasts');
   let nextX = 0;
   let nextY = 0;
@@ -6011,8 +6013,8 @@
 
     // If list view is active, route click to list view instead of canvas
     if(window.ListView && window.ListView.isActive()){
-      console.log('  → Routing to List View');
-      window.ListView.selectFileByPath(path);
+      console.log('  → Routing to List View with line', line);
+      window.ListView.selectFileByPath(path, line);
       return;
     }
 

@@ -215,6 +215,12 @@
   padding-left: 3em;
 }
 
+/* Override Prism theme backgrounds - panel already has dark background */
+.preview-content pre[class*="language-"],
+.preview-content code[class*="language-"] {
+  background: transparent !important;
+}
+
 .preview-content .line-numbers-rows {
   border-right: 1px solid var(--border);
   opacity: 0.5;
@@ -246,6 +252,48 @@
   padding: 2px 0;
   border-radius: 2px;
   font-weight: 600;
+}
+
+/* Line Highlight - Highlight specific line when clicked from search results */
+.preview-content pre.line-highlight-active {
+  position: relative;
+}
+
+/* Use CSS counter and attribute selector to highlight the target line */
+.preview-content pre.line-highlight-active code {
+  counter-reset: line;
+}
+
+.preview-content pre.line-highlight-active code::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: calc((attr(data-highlight-line) - 1) * 1.6em);
+  height: 1.6em;
+  background: rgba(88, 166, 255, 0.15);
+  border-left: 3px solid var(--accent);
+  pointer-events: none;
+  z-index: -1;
+}
+
+/* Alternative approach using a wrapper element */
+.preview-content .line-highlight {
+  background: rgba(88, 166, 255, 0.15);
+  border-left: 3px solid var(--accent);
+  display: block;
+  margin-left: -10px;
+  padding-left: 10px;
+  animation: highlight-fade 2s ease;
+}
+
+@keyframes highlight-fade {
+  0% {
+    background: rgba(88, 166, 255, 0.3);
+  }
+  100% {
+    background: rgba(88, 166, 255, 0.15);
+  }
 }
 
 /* Resize Handle for Preview Panel */

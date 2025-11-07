@@ -157,11 +157,11 @@
     const fileName = pathParts.pop();
     const directory = pathParts.join('/');
 
-    // Format file size
-    const size = formatFileSize(result.size_bytes);
+    // Format file size (from metadata object)
+    const size = formatFileSize(result.metadata?.size_bytes || 0);
 
-    // Format lines
-    const lines = result.line_count ? result.line_count.toLocaleString() : '-';
+    // Format lines (from metadata object)
+    const lines = result.metadata?.line_count ? result.metadata.line_count.toLocaleString() : '-';
 
     // Format updated time
     const updated = result.last_modified ? formatTime(result.last_modified) : '-';
@@ -207,7 +207,7 @@
   }
 
   // Select a file and show preview
-  function selectFile(result){
+  function selectFile(result, focusLine = null){
     selectedFilePath = result.file_path;
 
     // Update selection UI
@@ -220,13 +220,13 @@
       }
     });
 
-    // Show preview
-    showPreview(result);
+    // Show preview with optional line focus
+    showPreview(result, focusLine);
   }
 
   // Show file preview with syntax highlighting
-  async function showPreview(result){
-    console.log('[List View] showPreview called for:', result.file_path);
+  async function showPreview(result, focusLine = null){
+    console.log('[List View] showPreview called for:', result.file_path, focusLine ? `(line ${focusLine})` : '');
 
     previewFileName.textContent = result.file_path;
     previewEdit.style.display = 'inline-block';
@@ -253,7 +253,7 @@
       }
 
       // Render text preview with syntax highlighting
-      renderTextPreview(content, result);
+      renderTextPreview(content, result, focusLine);
 
     } catch(err){
       console.error('[List View] Preview error:', err);
@@ -292,7 +292,7 @@
   }
 
   // Render text file with syntax highlighting
-  function renderTextPreview(content, result){
+  function renderTextPreview(content, result, focusLine = null){
     const language = result.language || 'text';
     const prismLang = mapLanguageToPrism(language);
 
@@ -300,7 +300,8 @@
       language,
       prismLang,
       contentLength: content.length,
-      matchCount: result.matches ? result.matches.length : 0
+      matchCount: result.matches ? result.matches.length : 0,
+      focusLine
     });
 
     // Create pre/code element
@@ -331,6 +332,11 @@
     // Highlight search matches if available
     if(result.matches && result.matches.length > 0){
       highlightMatches(code, result.matches);
+    }
+
+    // Highlight and scroll to specific line if requested
+    if(focusLine){
+      highlightAndScrollToLine(pre, focusLine);
     }
 
     console.log(`✨ [List View] Rendered preview for ${result.file_path}`);
@@ -387,6 +393,83 @@
     });
 
     codeEl.innerHTML = html;
+  }
+
+  // Highlight and scroll to specific line
+  function highlightAndScrollToLine(preEl, lineNumber){
+    console.log('[List View] Highlighting line:', lineNumber);
+
+    // Remove any existing highlight styles
+    const existingStyle = document.getElementById('list-view-line-highlight-style');
+    if(existingStyle) existingStyle.remove();
+
+    // Prism line-numbers plugin splits code into lines
+    // We need to find the specific line and highlight it
+    const codeEl = preEl.querySelector('code');
+    if(!codeEl) return;
+
+    // Split content by newlines to find the line
+    const lines = codeEl.textContent.split('\n');
+    if(lineNumber < 1 || lineNumber > lines.length){
+      console.warn('[List View] Line number out of range:', lineNumber, 'max:', lines.length);
+      return;
+    }
+
+    // Add CSS rule to highlight the specific line number
+    // Prism wraps each line, so we can target it with nth-child
+    const styleEl = document.createElement('style');
+    styleEl.id = 'list-view-line-highlight-style';
+    styleEl.textContent = `
+      .preview-content pre.line-numbers > code {
+        position: relative;
+      }
+      .preview-content pre.line-numbers > code > .line-numbers-rows > span:nth-child(${lineNumber}),
+      .preview-content pre.line-numbers > code > span:nth-child(${lineNumber}) {
+        background: rgba(88, 166, 255, 0.2);
+        border-left: 3px solid var(--accent);
+        display: inline-block;
+        width: 100%;
+        animation: highlight-pulse 2s ease;
+      }
+      @keyframes highlight-pulse {
+        0%, 100% { background: rgba(88, 166, 255, 0.2); }
+        50% { background: rgba(88, 166, 255, 0.35); }
+      }
+    `;
+    document.head.appendChild(styleEl);
+
+    preEl.classList.add('line-highlight-active');
+
+    console.log('[List View] Line highlight applied via CSS, scrolling to line', lineNumber);
+
+    // Scroll to the line
+    // Use requestAnimationFrame to ensure Prism has finished rendering
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        // Get actual line height from the rendered element
+        const lineNumbersRows = preEl.querySelector('.line-numbers-rows');
+        if(lineNumbersRows && lineNumbersRows.children.length >= lineNumber){
+          // Prism creates a span for each line in .line-numbers-rows
+          const lineSpan = lineNumbersRows.children[lineNumber - 1];
+          if(lineSpan){
+            // Calculate scroll position relative to preview content
+            const lineOffset = lineSpan.offsetTop;
+            const containerHeight = previewContent.clientHeight;
+            // Center the line in the viewport
+            previewContent.scrollTop = lineOffset - (containerHeight / 2) + 10;
+            console.log('[List View] Scrolled to exact line position:', lineOffset);
+            return;
+          }
+        }
+
+        // Fallback: estimate based on line height
+        const computedStyle = window.getComputedStyle(preEl);
+        const lineHeight = parseFloat(computedStyle.lineHeight) || 20;
+        const scrollTop = (lineNumber - 1) * lineHeight - 100;
+        previewContent.scrollTop = Math.max(0, scrollTop);
+        console.log('[List View] Scrolled to estimated line position');
+      });
+    });
   }
 
   // Clear preview
@@ -527,15 +610,15 @@
   }
 
   // Select file by path (for integration with search result clicks)
-  function selectFileByPath(filePath){
-    console.log('[List View] selectFileByPath called for:', filePath);
+  function selectFileByPath(filePath, focusLine = null){
+    console.log('[List View] selectFileByPath called for:', filePath, focusLine ? `(line ${focusLine})` : '');
 
     // Find the result in current search results
     const result = currentSearchResults.find(r => r.file_path === filePath);
 
     if(result){
       console.log('[List View] Found result, selecting...');
-      selectFile(result);
+      selectFile(result, focusLine);
     } else {
       console.warn('[List View] File not found in current results:', filePath);
       console.log('[List View] Available results:', currentSearchResults.map(r => r.file_path));
