@@ -90,7 +90,7 @@ If Omarchy 3.x+ is detected, launcher integrations are installed automatically d
 
 ```bash
 # Download script
-curl -fsSL https://raw.githubusercontent.com/ryrobes/rewindex/main/rofi-ui.sh \
+curl -fsSL https://raw.githubusercontent.com/ryrobes/rewindex/refs/heads/master/rofi-ui.sh \
   -o ~/.local/bin/rewindex-rofi
 chmod +x ~/.local/bin/rewindex-rofi
 
@@ -104,7 +104,7 @@ bind = SUPER, S, exec, rewindex-rofi
 ```bash
 # Download plugin
 mkdir -p ~/.config/walker/scripts
-curl -fsSL https://raw.githubusercontent.com/ryrobes/rewindex/main/walker-ui.sh \
+curl -fsSL https://raw.githubusercontent.com/ryrobes/rewindex/refs/heads/master/walker-ui.sh \
   -o ~/.config/walker/scripts/rewindex.sh
 chmod +x ~/.config/walker/scripts/rewindex.sh
 

@@ -5,7 +5,7 @@ Fast, local code search powered by Elasticsearch. Index your entire home directo
 ## Quick Install
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ryrobes/rewindex/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/ryrobes/rewindex/refs/heads/master/install.sh | bash
 ```
 
 This will:

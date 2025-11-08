@@ -5,7 +5,7 @@
 # Install Rewindex server as a systemd user service with Elasticsearch
 #
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/ryrobes/rewindex/main/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/ryrobes/rewindex/refs/heads/master/install.sh | bash
 #   # Or:
 #   bash install.sh
 #
@@ -351,7 +351,7 @@ install_rewindexignore() {
     fi
 
     # Download .rewindexignore from GitHub
-    local rewindexignore_url="https://raw.githubusercontent.com/${GITHUB_REPO}/main/.rewindexignore"
+    local rewindexignore_url="https://raw.githubusercontent.com/${GITHUB_REPO}/refs/heads/master/.rewindexignore"
 
     info "Downloading .rewindexignore from ${rewindexignore_url}"
 
@@ -400,7 +400,7 @@ install_desktop_entry() {
     mkdir -p "${DATA_DIR}"
 
     # Download icon
-    local icon_url="https://raw.githubusercontent.com/${GITHUB_REPO}/main/rewindex/web/logo.png"
+    local icon_url="https://raw.githubusercontent.com/${GITHUB_REPO}/refs/heads/master/rewindex/web/logo.png"
     local icon_path="${DATA_DIR}/logo.png"
 
     info "Downloading application icon..."
@@ -463,8 +463,8 @@ install_launcher_integration() {
     info "Installing Omarchy launcher integrations..."
 
     # Download scripts
-    local rofi_url="https://raw.githubusercontent.com/${GITHUB_REPO}/main/rofi-ui.sh"
-    local walker_url="https://raw.githubusercontent.com/${GITHUB_REPO}/main/walker-ui.sh"
+    local rofi_url="https://raw.githubusercontent.com/${GITHUB_REPO}/refs/heads/master/rofi-ui.sh"
+    local walker_url="https://raw.githubusercontent.com/${GITHUB_REPO}/refs/heads/master/walker-ui.sh"
 
     # Install Rofi UI
     if command -v rofi &> /dev/null || command -v wofi &> /dev/null; then
