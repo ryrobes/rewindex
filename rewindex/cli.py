@@ -185,9 +185,23 @@ def cmd_index_rebuild(args: argparse.Namespace) -> int:
 
 
 def cmd_search(args: argparse.Namespace) -> int:
-    root = _project_root(Path.cwd())
+    cwd = Path.cwd()
+    root = _project_root(cwd)
     cfg = Config.load(root)
     from .es import ensure_indices, ESClient
+    from .config import get_auto_path_filter
+
+    # Calculate auto-path filter if not explicitly set
+    auto_path_prefix = None
+    if args.path is None and not getattr(args, 'all', False):
+        auto_path = get_auto_path_filter(root, cwd)
+        if auto_path:
+            auto_path_prefix = auto_path
+            if not args.json and not args.oneline and not args.files_only:
+                print(f"[rewindex] Auto-scoped to: {auto_path}/ (use --all to disable)", file=sys.stderr)
+            if getattr(args, 'debug', False):
+                print(f"[rewindex] DEBUG: cwd={cwd}, root={root}, auto_path_prefix={auto_path_prefix}", file=sys.stderr)
+
     try:
         es = ESClient(cfg.elasticsearch.host)
         idx = ensure_indices(es, cfg.resolved_index_prefix())
@@ -206,7 +220,8 @@ def cmd_search(args: argparse.Namespace) -> int:
 
         filters = SearchFilters(
             language=args.lang,
-            path_pattern=args.path,
+            path_pattern=args.path,  # Use explicit --path if provided
+            path_prefix=auto_path_prefix,  # Use auto-path for prefix matching
             file_types=[args.ext] if args.ext else None,
             is_current=None if (args.include_deleted or use_versions) else True,
             created_before_ms=as_of_ms,
@@ -226,7 +241,13 @@ def cmd_search(args: argparse.Namespace) -> int:
                 es,
                 index_name,
                 args.query,
-                SearchFilters(path_pattern=args.path, file_types=[args.ext] if args.ext else None, is_current=filters.is_current, created_before_ms=as_of_ms),
+                SearchFilters(
+                    path_pattern=args.path,
+                    path_prefix=auto_path_prefix,
+                    file_types=[args.ext] if args.ext else None,
+                    is_current=filters.is_current,
+                    created_before_ms=as_of_ms
+                ),
                 options,
                 debug=getattr(args, 'debug', False),
             )
@@ -1032,6 +1053,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp_search.add_argument("--files-only", action="store_true")
     sp_search.add_argument("--highlight", action="store_true", help="Enable <mark> highlighting (off by default)")
     sp_search.add_argument("--debug", action="store_true", help="Include ES query in JSON output")
+    sp_search.add_argument("--all", action="store_true", help="Search entire index (disable auto-path filtering)")
     sp_search.add_argument("--all-versions", action="store_true", help="Search across all versions (uses versions index)")
     sp_search.add_argument("--as-of", help="Temporal cutoff. Supports relative ('10m', '2 hours', '3 days') or ISO 8601 ('2025-01-31')")
     sp_search.add_argument("--include-deleted", action="store_true", help="Include non-current/deleted files in files index results")
@@ -1105,6 +1127,17 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     argv = argv if argv is not None else sys.argv[1:]
+
+    # Search shorthand: if first arg doesn't match a subcommand, assume it's a search query
+    SUBCOMMANDS = {
+        'index', 'search', 'find-function', 'find-class', 'find-todos',
+        'serve', 'history', 'show', 'diff', 'view', 'restore', 'tui', 'usage'
+    }
+
+    # If we have args and first arg isn't a subcommand or flag, prepend 'search'
+    if argv and not argv[0].startswith('-') and argv[0] not in SUBCOMMANDS:
+        argv = ['search'] + argv
+
     parser = build_parser()
     args = parser.parse_args(argv)
     if not hasattr(args, "func"):

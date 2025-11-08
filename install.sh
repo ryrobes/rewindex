@@ -207,18 +207,18 @@ download_binary() {
 
     # Determine download URL
     if [ "$REWINDEX_VERSION" = "latest" ]; then
-        local download_url="https://github.com/${GITHUB_REPO}/releases/latest/download/rewindex-server-Linux-${arch}"
+        local download_url="https://github.com/${GITHUB_REPO}/releases/latest/download/rewindex-Linux-${arch}"
     else
-        local download_url="https://github.com/${GITHUB_REPO}/releases/download/${REWINDEX_VERSION}/rewindex-server-Linux-${arch}"
+        local download_url="https://github.com/${GITHUB_REPO}/releases/download/${REWINDEX_VERSION}/rewindex-Linux-${arch}"
     fi
 
     info "Download URL: ${download_url}"
 
     # Download with curl or wget
     if command -v curl &> /dev/null; then
-        curl -fsSL -o "${INSTALL_DIR}/rewindex-server" "$download_url"
+        curl -fsSL -o "${INSTALL_DIR}/rewindex" "$download_url"
     elif command -v wget &> /dev/null; then
-        wget -q -O "${INSTALL_DIR}/rewindex-server" "$download_url"
+        wget -q -O "${INSTALL_DIR}/rewindex" "$download_url"
     else
         error "Neither curl nor wget found"
         exit 1
@@ -231,9 +231,9 @@ download_binary() {
     fi
 
     # Make executable
-    chmod +x "${INSTALL_DIR}/rewindex-server"
+    chmod +x "${INSTALL_DIR}/rewindex"
 
-    success "Binary installed to ${INSTALL_DIR}/rewindex-server"
+    success "Binary installed to ${INSTALL_DIR}/rewindex"
 }
 
 # Create service wrapper script
@@ -261,11 +261,11 @@ export REWINDEX_ES_HOST="$ES_HOST"
 # Initialize project on first run
 if [ ! -f "$HOME/.rewindex.json" ]; then
     echo "Initializing Rewindex in $HOME..."
-    "$HOME/.local/bin/rewindex-server" index init
+    "$HOME/.local/bin/rewindex" index init
 fi
 
 # Start server
-exec "$HOME/.local/bin/rewindex-server" serve \
+exec "$HOME/.local/bin/rewindex" serve \
     --host "${REWINDEX_HOST:-127.0.0.1}" \
     --port "${REWINDEX_PORT:-8899}"
 WRAPPER_EOF
@@ -503,11 +503,12 @@ print_summary() {
     echo "  View logs:        journalctl --user -u rewindex -f"
     echo "  Restart service:  systemctl --user restart rewindex"
     echo "  Stop service:     systemctl --user stop rewindex"
-    echo "  CLI tool:         rewindex-server --help"
+    echo "  CLI search:       rewindex \"query\" --limit 20"
+    echo "  CLI help:         rewindex --help"
     echo ""
 
     info "Configuration:"
-    echo "  Binary:           ${INSTALL_DIR}/rewindex-server"
+    echo "  Binary:           ${INSTALL_DIR}/rewindex"
     echo "  Service:          ${SERVICE_DIR}/rewindex.service"
     echo "  Logs:             ${LOG_FILE}"
     echo "  Desktop Entry:    ${HOME}/.local/share/applications/REWINDex.desktop"
@@ -518,7 +519,9 @@ print_summary() {
     info "Next Steps:"
     echo "  1. Open http://${REWINDEX_HOST}:${REWINDEX_PORT}/ui in your browser"
     echo "  2. Wait for initial indexing to complete (check logs)"
-    echo "  3. Start searching your code!"
+    echo "  3. Start searching:"
+    echo "     - Web UI: http://${REWINDEX_HOST}:${REWINDEX_PORT}/ui"
+    echo "     - CLI: rewindex \"your query\" --limit 20"
     echo ""
 }
 
@@ -527,7 +530,7 @@ show_uninstall_instructions() {
     info "To uninstall Rewindex:"
     echo "  systemctl --user stop rewindex"
     echo "  systemctl --user disable rewindex"
-    echo "  rm -f ${INSTALL_DIR}/rewindex-server"
+    echo "  rm -f ${INSTALL_DIR}/rewindex"
     echo "  rm -f ${INSTALL_DIR}/rewindex-service"
     echo "  rm -f ${SERVICE_DIR}/rewindex.service"
     echo "  systemctl --user daemon-reload"
@@ -606,7 +609,7 @@ main() {
         info "The watcher is already running in the background via the systemd service"
         echo ""
 
-        "${INSTALL_DIR}/rewindex-server" index start || {
+        "${INSTALL_DIR}/rewindex" index start || {
             warn "Initial indexing encountered errors (this is normal)"
             info "The watcher will continue indexing in the background"
         }
@@ -616,7 +619,7 @@ main() {
         info "The watcher will now keep your index up-to-date automatically"
     else
         info "Skipping initial indexing"
-        info "You can run it later with: rewindex-server index start"
+        info "You can run it later with: rewindex index start"
     fi
 
     # Show summary

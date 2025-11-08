@@ -13,10 +13,14 @@ on:
 jobs:
   build-linux:
     name: Build Linux Binary
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        arch: [x86_64, aarch64]
+        include:
+          - os: ubuntu-latest
+            arch: x86_64
+          - os: ubuntu-24.04-arm64
+            arch: arm64
 
     steps:
     - name: Checkout code
@@ -30,25 +34,26 @@ jobs:
     - name: Install dependencies
       run: |
         pip install --upgrade pip
-        pip install -e ".[build,tui]"
+        pip install pyinstaller watchdog
 
     - name: Build binary
       run: |
-        ./build-binary.sh --clean --tui
+        ./build-binary.sh --clean
 
     - name: Rename binary
       run: |
-        mv dist/rewindex-server dist/rewindex-server-Linux-${{ matrix.arch }}
+        mv dist/rewindex dist/rewindex-Linux-${{ matrix.arch }}
 
     - name: Test binary
       run: |
-        dist/rewindex-server-Linux-${{ matrix.arch }} --help
+        chmod +x dist/rewindex-Linux-${{ matrix.arch }}
+        dist/rewindex-Linux-${{ matrix.arch }} --help
 
     - name: Upload binary
       uses: actions/upload-artifact@v4
       with:
-        name: rewindex-server-Linux-${{ matrix.arch }}
-        path: dist/rewindex-server-Linux-${{ matrix.arch }}
+        name: rewindex-Linux-${{ matrix.arch }}
+        path: dist/rewindex-Linux-${{ matrix.arch }}
         retention-days: 1
 
     - name: Upload to release
@@ -58,21 +63,20 @@ jobs:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
         upload_url: ${{ github.event.release.upload_url }}
-        asset_path: dist/rewindex-server-Linux-${{ matrix.arch }}
-        asset_name: rewindex-server-Linux-${{ matrix.arch }}
+        asset_path: dist/rewindex-Linux-${{ matrix.arch }}
+        asset_name: rewindex-Linux-${{ matrix.arch }}
         asset_content_type: application/octet-stream
 
   build-macos:
     name: Build macOS Binary
-    runs-on: macos-latest
+    runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        arch: [x86_64, arm64]
         include:
-          - arch: x86_64
-            target: x86_64-apple-darwin
-          - arch: arm64
-            target: arm64-apple-darwin
+          - os: macos-13
+            arch: x86_64
+          - os: macos-14
+            arch: arm64
 
     steps:
     - name: Checkout code
@@ -86,25 +90,26 @@ jobs:
     - name: Install dependencies
       run: |
         pip install --upgrade pip
-        pip install -e ".[build,tui]"
+        pip install pyinstaller watchdog
 
     - name: Build binary
       run: |
-        ./build-binary.sh --clean --tui
+        ./build-binary.sh --clean
 
     - name: Rename binary
       run: |
-        mv dist/rewindex-server dist/rewindex-server-Darwin-${{ matrix.arch }}
+        mv dist/rewindex dist/rewindex-Darwin-${{ matrix.arch }}
 
     - name: Test binary
       run: |
-        dist/rewindex-server-Darwin-${{ matrix.arch }} --help
+        chmod +x dist/rewindex-Darwin-${{ matrix.arch }}
+        dist/rewindex-Darwin-${{ matrix.arch }} --help
 
     - name: Upload binary
       uses: actions/upload-artifact@v4
       with:
-        name: rewindex-server-Darwin-${{ matrix.arch }}
-        path: dist/rewindex-server-Darwin-${{ matrix.arch }}
+        name: rewindex-Darwin-${{ matrix.arch }}
+        path: dist/rewindex-Darwin-${{ matrix.arch }}
         retention-days: 1
 
     - name: Upload to release
@@ -114,8 +119,8 @@ jobs:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
         upload_url: ${{ github.event.release.upload_url }}
-        asset_path: dist/rewindex-server-Darwin-${{ matrix.arch }}
-        asset_name: rewindex-server-Darwin-${{ matrix.arch }}
+        asset_path: dist/rewindex-Darwin-${{ matrix.arch }}
+        asset_name: rewindex-Darwin-${{ matrix.arch }}
         asset_content_type: application/octet-stream
 
   create-checksums:
@@ -133,7 +138,7 @@ jobs:
     - name: Create checksums
       run: |
         cd binaries
-        find . -type f -name "rewindex-server-*" -exec sha256sum {} \; > SHA256SUMS
+        find . -type f -name "rewindex-*" -exec sha256sum {} \; > SHA256SUMS
         cat SHA256SUMS
 
     - name: Upload checksums

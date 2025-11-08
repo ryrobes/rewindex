@@ -100,27 +100,30 @@ echo ""
 pyinstaller rewindex-server.spec --clean --noconfirm
 
 # Check if build succeeded
-if [ -f "dist/rewindex-server" ]; then
+if [ -f "dist/rewindex" ]; then
     echo ""
     echo -e "${GREEN}=== Build Complete ===${NC}"
     echo ""
-    echo "Binary location: $(pwd)/dist/rewindex-server"
+    echo "Binary location: $(pwd)/dist/rewindex"
 
     # Show binary size
-    SIZE=$(du -h dist/rewindex-server | cut -f1)
+    SIZE=$(du -h dist/rewindex | cut -f1)
     echo "Binary size: $SIZE"
 
     echo ""
     echo "To install system-wide:"
-    echo "  sudo cp dist/rewindex-server /usr/local/bin/"
+    echo "  sudo cp dist/rewindex /usr/local/bin/"
     echo ""
     echo "To run locally:"
-    echo "  ./dist/rewindex-server serve --host 127.0.0.1 --port 8899"
+    echo "  ./dist/rewindex serve --host 127.0.0.1 --port 8899"
+    echo ""
+    echo "Search shorthand:"
+    echo "  ./dist/rewindex \"auth\" --limit 20"
     echo ""
 
     # Test the binary
     echo -e "${YELLOW}Testing binary...${NC}"
-    if ./dist/rewindex-server --help > /dev/null 2>&1; then
+    if ./dist/rewindex --help > /dev/null 2>&1; then
         echo -e "${GREEN}✓ Binary test passed${NC}"
     else
         echo -e "${RED}✗ Binary test failed${NC}"

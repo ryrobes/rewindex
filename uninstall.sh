@@ -120,9 +120,9 @@ if command -v systemctl &> /dev/null; then
 fi
 
 # Remove binaries
-if [ -f "${INSTALL_DIR}/rewindex-server" ]; then
+if [ -f "${INSTALL_DIR}/rewindex" ]; then
     info "Removing Rewindex binary..."
-    rm -f "${INSTALL_DIR}/rewindex-server"
+    rm -f "${INSTALL_DIR}/rewindex"
     success "Binary removed"
 fi
 

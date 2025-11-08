@@ -246,7 +246,7 @@ class Config:
             for pattern in rewindexignore_patterns:
                 if pattern not in existing:
                     cfg.indexing.exclude_patterns.append(pattern)
-            print(f"[config] Loaded {len(rewindexignore_patterns)} patterns from .rewindexignore")
+            #print(f"[config] Loaded {len(rewindexignore_patterns)} patterns from .rewindexignore")
 
         # If binary indexing is enabled, remove binary file extensions from exclude patterns
         if cfg.indexing.index_binaries:
@@ -307,16 +307,63 @@ def ensure_rewindex_dir(project_root: Path) -> Path:
 
 def find_project_root(start: Path) -> Path:
     """Resolve the project root by walking up until we find .rewindex/ or .git/ or a config file.
-    Falls back to the starting directory if nothing else is found.
+
+    Priority:
+    1. Check $HOME/.rewindex.json first (home index)
+    2. If not found, walk up from current directory
+    3. Falls back to the starting directory if nothing else is found.
     """
+    # Priority 1: Check home directory for primary index
+    home = Path.home()
+    home_config = home / ".rewindex.json"
+    if home_config.exists():
+        return home
+
+    # Priority 2: Walk up from current directory
     cur = start.resolve()
     prev = None
     while prev != cur:
-        if (cur / ".rewindex").exists() or (cur / ".rewindex.json").exists() or (cur / ".rewindex.yml").exists() or (cur / ".rewindex").exists() or (cur / ".rewindex.json").exists() or (cur / ".rewindex.yml").exists() or (cur / ".git").exists():
+        if (cur / ".rewindex").exists() or (cur / ".rewindex.json").exists() or (cur / ".rewindex.yml").exists() or (cur / ".git").exists():
             return cur
         prev = cur
         cur = cur.parent
+
+    # Fallback: use starting directory
     return start.resolve()
+
+
+def get_auto_path_filter(project_root: Path, cwd: Path) -> str | None:
+    """Calculate automatic path filter based on current working directory.
+
+    If cwd is a subdirectory of project_root, return the relative path.
+    This allows automatic scoping of searches to the current location.
+
+    Example:
+        project_root: /home/user
+        cwd: /home/user/repos/myproject
+        returns: "repos/myproject"
+
+    Returns None if cwd is not under project_root or is the project root itself.
+    """
+    try:
+        cwd_resolved = cwd.resolve()
+        root_resolved = project_root.resolve()
+
+        # Check if cwd is under project root
+        if not str(cwd_resolved).startswith(str(root_resolved)):
+            return None
+
+        # Calculate relative path
+        try:
+            rel_path = cwd_resolved.relative_to(root_resolved)
+            # If relative path is ".", we're at root (no filter needed)
+            if str(rel_path) == ".":
+                return None
+            return str(rel_path)
+        except ValueError:
+            return None
+    except Exception:
+        return None
 
 
 def generate_project_id(project_root: Path) -> str:

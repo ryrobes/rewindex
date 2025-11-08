@@ -396,13 +396,13 @@ def simple_search_es(
                 r["score_pct"] = 0.0
 
     # DEBUG: Print summary statistics
-    print(f"\n[DEBUG SUMMARY]")
+    #print(f"\n[DEBUG SUMMARY]")
     print(f"  Total hits: {debug_stats['total_hits']}")
-    print(f"  Hits with highlights: {debug_stats['hits_with_hl']}")
-    print(f"  Total ES fragments: {debug_stats['total_fragments']}")
-    print(f"  Total matches created: {debug_stats['total_matches']}")
-    print(f"  Avg fragments per hit: {debug_stats['total_fragments'] / max(1, debug_stats['hits_with_hl']):.1f}")
-    print(f"  Avg matches per result: {debug_stats['total_matches'] / max(1, debug_stats['total_hits']):.1f}")
+    #print(f"  Hits with highlights: {debug_stats['hits_with_hl']}")
+    #print(f"  Total ES fragments: {debug_stats['total_fragments']}")
+    #print(f"  Total matches created: {debug_stats['total_matches']}")
+    #print(f"  Avg fragments per hit: {debug_stats['total_fragments'] / max(1, debug_stats['hits_with_hl']):.1f}")
+    #print(f"  Avg matches per result: {debug_stats['total_matches'] / max(1, debug_stats['total_hits']):.1f}")
 
     out: Dict[str, Any] = {"total_hits": len(results), "results": results}
     if debug:
