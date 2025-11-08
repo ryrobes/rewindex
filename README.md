@@ -133,6 +133,8 @@ rm -f ~/.local/bin/rewindex
 rm -f ~/.local/bin/rewindex-service
 rm -f ~/.config/systemd/user/rewindex.service
 systemctl --user daemon-reload
+
+# Docker commands (add 'sudo' if needed on your system)
 docker stop rewindex-elasticsearch
 docker rm rewindex-elasticsearch
 ```

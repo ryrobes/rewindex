@@ -28,6 +28,9 @@ ES_PORT="${REWINDEX_ES_PORT:-9200}"
 REWINDEX_PORT="${REWINDEX_PORT:-8899}"
 REWINDEX_HOST="${REWINDEX_HOST:-127.0.0.1}"
 
+# Docker command (set by check_docker, may include sudo)
+DOCKER_CMD="docker"
+
 # Colors
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -88,7 +91,7 @@ check_systemd() {
     success "systemd found"
 }
 
-# Check if Docker is available
+# Check if Docker is available and determine if sudo is needed
 check_docker() {
     if ! command -v docker &> /dev/null; then
         error "Docker is required but not found"
@@ -96,14 +99,35 @@ check_docker() {
         exit 1
     fi
 
-    # Check if Docker daemon is running
-    if ! docker info &> /dev/null; then
-        error "Docker is installed but not running"
-        error "Please start Docker: sudo systemctl start docker"
-        exit 1
+    # Check if Docker works without sudo (Omarchy/user-space Docker)
+    if docker info &> /dev/null; then
+        DOCKER_CMD="docker"
+        success "Docker is available (user-space)"
+        return 0
     fi
 
-    success "Docker is available"
+    # Try with sudo (traditional Docker setup)
+    if sudo -n docker info &> /dev/null 2>&1; then
+        DOCKER_CMD="sudo docker"
+        success "Docker is available (requires sudo)"
+        return 0
+    fi
+
+    # Docker needs sudo but we don't have passwordless sudo
+    if sudo docker info &> /dev/null 2>&1; then
+        DOCKER_CMD="sudo docker"
+        success "Docker is available (requires sudo)"
+        info "You may be prompted for your password for Docker commands"
+        return 0
+    fi
+
+    # Docker daemon not running
+    error "Docker is installed but not running"
+    error "Please start Docker:"
+    error "  sudo systemctl start docker"
+    error "Or for rootless Docker:"
+    error "  systemctl --user start docker"
+    exit 1
 }
 
 # Check if Elasticsearch is already running
@@ -124,16 +148,16 @@ setup_elasticsearch() {
     info "Setting up Elasticsearch..."
 
     # Check if container already exists
-    if docker ps -a --format '{{.Names}}' | grep -q "^rewindex-elasticsearch$"; then
+    if $DOCKER_CMD ps -a --format '{{.Names}}' | grep -q "^rewindex-elasticsearch$"; then
         prompt "Elasticsearch container 'rewindex-elasticsearch' already exists."
         echo -n "Remove and recreate? [y/N] "
         read -r response < /dev/tty
         if [[ "$response" =~ ^[Yy]$ ]]; then
             info "Removing existing container..."
-            docker rm -f rewindex-elasticsearch || true
+            $DOCKER_CMD rm -f rewindex-elasticsearch || true
         else
             info "Starting existing container..."
-            docker start rewindex-elasticsearch
+            $DOCKER_CMD start rewindex-elasticsearch
             sleep 5
             if check_elasticsearch; then
                 success "Elasticsearch started"
@@ -147,7 +171,7 @@ setup_elasticsearch() {
 
     info "Creating Elasticsearch Docker container..."
 
-    docker run -d \
+    $DOCKER_CMD run -d \
         --name rewindex-elasticsearch \
         --restart unless-stopped \
         -p "${ES_PORT}:9200" \
@@ -173,7 +197,7 @@ setup_elasticsearch() {
     done
 
     error "Elasticsearch failed to start within 60 seconds"
-    error "Check logs with: docker logs rewindex-elasticsearch"
+    error "Check logs with: ${DOCKER_CMD} logs rewindex-elasticsearch"
     return 1
 }
 
@@ -606,8 +630,15 @@ show_uninstall_instructions() {
     echo "  rm -f ${INSTALL_DIR}/rewindex-service"
     echo "  rm -f ${SERVICE_DIR}/rewindex.service"
     echo "  systemctl --user daemon-reload"
-    echo "  docker stop rewindex-elasticsearch"
-    echo "  docker rm rewindex-elasticsearch"
+
+    # Show docker commands with or without sudo based on what was detected
+    if [ "${DOCKER_CMD}" = "docker" ]; then
+        echo "  docker stop rewindex-elasticsearch"
+        echo "  docker rm rewindex-elasticsearch"
+    else
+        echo "  sudo docker stop rewindex-elasticsearch"
+        echo "  sudo docker rm rewindex-elasticsearch"
+    fi
     echo ""
 }
 
