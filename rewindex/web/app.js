@@ -588,7 +588,7 @@
       query: qEl.value,
       filters: filters,
       options: {
-        limit: 300,
+        limit: (window.ListView && window.ListView.isActive()) ? 1000 : 300,
         context_lines: 2,
         highlight: true,
         fuzziness: fuzzyMode ? 'AUTO' : undefined,
@@ -1184,13 +1184,11 @@
     panel.className = 'filter-panel animating-in';
     panel.setAttribute('data-panel-id', panelId);
 
-    // Compact header with input + toggles + close all in one row
+    // Compact header with input + close (uses global fuzzy/partial settings from main search)
     const header = document.createElement('div');
     header.className = 'filter-panel-header';
     header.innerHTML = `
       <input type="text" class="filter-panel-input" placeholder="Refine further..." />
-      <button class="filter-option-btn" data-option="fuzzy" title="Fuzzy search">~</button>
-      <button class="filter-option-btn" data-option="partial" title="Partial match">*</button>
       <button class="filter-panel-close" title="Remove filter">×</button>
     `;
 
@@ -1214,15 +1212,13 @@
     panel.appendChild(header);
     panel.appendChild(resultsDiv);
 
-    // Add panel state
+    // Add panel state (uses global fuzzy/partial modes from main search)
     const panelState = {
       id: panelId,
       element: panel,
       query: '',
       results: [], // Cumulative intersection results (for display)
-      rawResults: [], // Raw search results (for computing next panel's intersection)
-      fuzzyMode: false,
-      partialMode: false
+      rawResults: [] // Raw search results (for computing next panel's intersection)
     };
     filterPanels.push(panelState);
 
@@ -1235,19 +1231,15 @@
       panel.classList.remove('animating-in');
     });
 
-    // Event handlers
+    // Event handlers (uses global fuzzy/partial modes from main search)
     const closeBtn = panel.querySelector('.filter-panel-close');
     const input = panel.querySelector('.filter-panel-input');
-    const fuzzyBtn = panel.querySelector('[data-option="fuzzy"]');
-    const partialBtn = panel.querySelector('[data-option="partial"]');
 
     closeBtn.onclick = () => removeFilterPanel(panelId);
     input.addEventListener('input', debounce(() => updateFilterPanel(panelId), 300));
     input.addEventListener('keydown', (e) => {
       if(e.key === 'Enter') updateFilterPanel(panelId);
     });
-    fuzzyBtn.onclick = () => toggleFilterOption(panelId, 'fuzzy');
-    partialBtn.onclick = () => toggleFilterOption(panelId, 'partial');
 
     // Update workspace positioning
     updateWorkspacePosition();
@@ -1338,12 +1330,15 @@
         ...(currentAsOfMs ? { as_of_ms: currentAsOfMs } : {})
       },
       options: {
-        limit: 300,
+        limit: (window.ListView && window.ListView.isActive()) ? 3000 : 300,
         context_lines: 2,
         highlight: true,
-        fuzziness: panel.fuzzyMode ? 'AUTO' : undefined,
-        partial: panel.partialMode,
-        show_deleted: deletedMode
+        // Use GLOBAL fuzzy/partial settings from main search (not panel-specific)
+        fuzziness: fuzzyMode ? 'AUTO' : undefined,
+        partial: partialMode,
+        show_deleted: deletedMode,
+        search_content: contentSearchEnabled,
+        search_name: nameSearchEnabled
       }
     };
 
@@ -1389,28 +1384,8 @@
     }
   }
 
-  // Toggle filter option (fuzzy/partial)
-  async function toggleFilterOption(panelId, option){
-    const panel = filterPanels.find(p => p.id === panelId);
-    if(!panel) return;
-
-    if(option === 'fuzzy'){
-      panel.fuzzyMode = !panel.fuzzyMode;
-      const btn = panel.element.querySelector('[data-option="fuzzy"]');
-      btn.classList.toggle('active', panel.fuzzyMode);
-    } else if(option === 'partial'){
-      panel.partialMode = !panel.partialMode;
-      const btn = panel.element.querySelector('[data-option="partial"]');
-      btn.classList.toggle('active', panel.partialMode);
-    }
-
-    // Re-run search if query exists
-    if(panel.query){
-      await updateFilterPanel(panelId);
-    }
-  }
-
   // Render results in a filter panel (same format as primary results)
+  // Note: Filter panels now use global fuzzy/partial modes from main search
   function renderFilterPanelResults(panel){
     // Get header and content wrappers
     let resultsHeader = panel.element.querySelector('.filter-results-header');
@@ -5358,7 +5333,8 @@
 
       // Include binary files on canvas (now that we can render them!)
       // Binary toggle controls visibility in results, not canvas
-      const maxFiles = 300;
+      // List view can handle more files since no canvas rendering overhead
+      const maxFiles = (window.ListView && window.ListView.isActive()) ? 1000 : 300;
       const limitedResults = filteredResults.slice(0, maxFiles);
       list = limitedResults.map(r => r.file_path);
 

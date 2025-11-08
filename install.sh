@@ -127,7 +127,7 @@ setup_elasticsearch() {
     if docker ps -a --format '{{.Names}}' | grep -q "^rewindex-elasticsearch$"; then
         prompt "Elasticsearch container 'rewindex-elasticsearch' already exists."
         echo -n "Remove and recreate? [y/N] "
-        read -r response
+        read -r response < /dev/tty
         if [[ "$response" =~ ^[Yy]$ ]]; then
             info "Removing existing container..."
             docker rm -f rewindex-elasticsearch || true
@@ -343,7 +343,7 @@ install_rewindexignore() {
     # Check if .rewindexignore already exists
     if [ -f "${HOME}/.rewindexignore" ]; then
         prompt ".rewindexignore already exists in home directory. Overwrite? [y/N]"
-        read -r response
+        read -r response < /dev/tty
         if [[ ! "$response" =~ ^[Yy]$ ]]; then
             info "Keeping existing .rewindexignore"
             return 0
@@ -555,7 +555,7 @@ main() {
     # Elasticsearch setup
     if ! check_elasticsearch; then
         prompt "Would you like to set up Elasticsearch via Docker? [Y/n]"
-        read -r response
+        read -r response < /dev/tty
         if [[ ! "$response" =~ ^[Nn]$ ]]; then
             setup_elasticsearch || exit 1
         else
@@ -568,13 +568,13 @@ main() {
 
     # Prompt for custom configuration
     prompt "Rewindex server port (default: ${REWINDEX_PORT}):"
-    read -r custom_port
+    read -r custom_port < /dev/tty
     if [ -n "$custom_port" ]; then
         REWINDEX_PORT="$custom_port"
     fi
 
     prompt "Rewindex server host (default: ${REWINDEX_HOST}):"
-    read -r custom_host
+    read -r custom_host < /dev/tty
     if [ -n "$custom_host" ]; then
         REWINDEX_HOST="$custom_host"
     fi
@@ -594,6 +594,30 @@ main() {
 
     # Start service
     enable_service
+
+    echo ""
+
+    # Prompt for initial indexing
+    prompt "Would you like to run the initial index now? [Y/n]"
+    read -r response < /dev/tty
+    if [[ ! "$response" =~ ^[Nn]$ ]]; then
+        info "Starting initial indexing of ${HOME}..."
+        info "This may take a few minutes depending on the size of your home directory"
+        info "The watcher is already running in the background via the systemd service"
+        echo ""
+
+        "${INSTALL_DIR}/rewindex-server" index start || {
+            warn "Initial indexing encountered errors (this is normal)"
+            info "The watcher will continue indexing in the background"
+        }
+
+        echo ""
+        success "Initial indexing complete!"
+        info "The watcher will now keep your index up-to-date automatically"
+    else
+        info "Skipping initial indexing"
+        info "You can run it later with: rewindex-server index start"
+    fi
 
     # Show summary
     print_summary

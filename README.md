@@ -1,4 +1,8 @@
-Rewindex – Local Code Search (Elasticsearch)
+Rewindex – Local Code Search (Elasticsearch) WIP
+
+Quick start if in Omarchy Linux:
+
+`curl -fsSL https://raw.githubusercontent.com/ryrobes/rewindex/refs/heads/master/install.sh | bash`
 
 - Index files into Elasticsearch with per-file current doc + version history
 - Extract simple metadata (imports, functions, classes, TODOs)
@@ -107,27 +111,6 @@ Temporal and History (CLI)
 
   `python3 -m rewindex.cli diff path/to/file.py <hash1> <hash2>`
 
-Project Layout
-
-- `rewindex/` – Python package
-  - `config.py` – config loading and defaults
-  - `es.py` – minimal HTTP ES client + index helpers
-  - `es_schema.py` – ES index mappings and settings
-  - `language.py` – extension → language mapping
-  - `extractor.py` – simple regex-based metadata extraction
-  - `indexing.py` – scan directories and index into ES
-  - `search.py` – ES-backed simple search and result formatting
-  - `cli.py` – command line interface
-  - `api_server.py` – minimal HTTP JSON server for search/status
-  - `web/` – packaged static UI assets (served at `/ui` and `/static/*`)
-  - `web/` – static UI (`/ui`, `/static/*`)
-
-Limitations
-
-- File watching uses a basic polling loop (no OS-level watchers). It’s good enough for local use but not as efficient.
-- Only a subset of CLI/API from FRD.md is implemented here. It’s structured to be extended.
- - Web UI is intentionally lightweight. Monaco is loaded from CDN; if offline, a `<pre>` fallback is used.
-
 Elasticsearch Quickstart (Docker)
 
 Rewindex requires a running Elasticsearch on `localhost:9200`. Use the following to spin up a local single-node instance for development.
@@ -144,41 +127,11 @@ Option A — docker run
 
   Should return cluster info JSON with `tagline: "You Know, for Search"`.
 
-Option B — docker-compose
-
-1) Start:
-
-   `docker compose up -d`
-
-2) Verify:
-
-   `curl http://localhost:9200`
-
 Ports and config expectations
 
 - Elasticsearch HTTP: `localhost:9200` (default from FRD and used by `.rewindex.json` below)
 - Elasticsearch transport: `localhost:9300` (cluster-internal; exposed for completeness)
 - Rewindex HTTP (this repo’s minimal API server): `localhost:8899`
-
-Optional `.rewindex.json`
-
-Create at project root to point to your local ES instance:
-
-```
-{
-  "elasticsearch": {
-    "host": "localhost:9200",
-    "index_prefix": "rewindex_${project.id}"
-  },
-  "project": {
-    "id": "default",
-    "name": "my-project"
-  }
-}
-```
-
-Notes on `index_prefix`:
-- Supports `${project.id}` and `${project.name}` substitution.
 
 Notes
 
