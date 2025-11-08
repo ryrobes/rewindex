@@ -454,6 +454,57 @@ DESKTOP_EOF
     fi
 }
 
+# Install Omarchy Walker/Rofi integration (optional)
+install_launcher_integration() {
+    if ! check_omarchy; then
+        return 0
+    fi
+
+    info "Installing Omarchy launcher integrations..."
+
+    # Download scripts
+    local rofi_url="https://raw.githubusercontent.com/${GITHUB_REPO}/main/rofi-ui.sh"
+    local walker_url="https://raw.githubusercontent.com/${GITHUB_REPO}/main/walker-ui.sh"
+
+    # Install Rofi UI
+    if command -v rofi &> /dev/null || command -v wofi &> /dev/null; then
+        info "Installing Rofi/Wofi integration..."
+        if command -v curl &> /dev/null; then
+            curl -fsSL "$rofi_url" -o "${INSTALL_DIR}/rewindex-rofi"
+        elif command -v wget &> /dev/null; then
+            wget -q -O "${INSTALL_DIR}/rewindex-rofi" "$rofi_url"
+        fi
+
+        if [ -f "${INSTALL_DIR}/rewindex-rofi" ]; then
+            chmod +x "${INSTALL_DIR}/rewindex-rofi"
+            success "Rofi integration installed: rewindex-rofi"
+            info "Usage: rewindex-rofi \"search query\""
+        fi
+    fi
+
+    # Install Walker integration
+    if [ -d "${HOME}/.config/walker" ]; then
+        info "Installing Walker plugin..."
+        mkdir -p "${HOME}/.config/walker/scripts"
+
+        if command -v curl &> /dev/null; then
+            curl -fsSL "$walker_url" -o "${HOME}/.config/walker/scripts/rewindex.sh"
+        elif command -v wget &> /dev/null; then
+            wget -q -O "${HOME}/.config/walker/scripts/rewindex.sh" "$walker_url"
+        fi
+
+        if [ -f "${HOME}/.config/walker/scripts/rewindex.sh" ]; then
+            chmod +x "${HOME}/.config/walker/scripts/rewindex.sh"
+            success "Walker plugin installed"
+            info "Add to ~/.config/walker/config.toml:"
+            info "  [[plugin]]"
+            info "  name = \"rewindex\""
+            info "  src = \"~/.config/walker/scripts/rewindex.sh\""
+            info "  prefix = \"rw\""
+        fi
+    fi
+}
+
 # Setup log rotation (optional)
 setup_logrotate() {
     local logrotate_config="${HOME}/.config/logrotate/rewindex"
@@ -611,6 +662,7 @@ main() {
     create_service
     install_rewindexignore
     install_desktop_entry
+    install_launcher_integration
     configure_path
     setup_logrotate
 
