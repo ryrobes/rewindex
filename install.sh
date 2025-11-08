@@ -372,6 +372,25 @@ install_rewindexignore() {
     fi
 }
 
+# Check if Omarchy is installed and meets version requirements
+check_omarchy() {
+    if ! command -v omarchy-version &> /dev/null; then
+        return 1
+    fi
+
+    local version
+    version=$(omarchy-version 2>/dev/null | grep -oP '^\d+\.\d+\.\d+' || echo "0.0.0")
+    local major
+    major=$(echo "$version" | cut -d. -f1)
+
+    # Require version 3.x.x or higher
+    if [ "$major" -ge 3 ]; then
+        return 0
+    else
+        return 1
+    fi
+}
+
 # Install desktop entry and icon
 install_desktop_entry() {
     info "Installing desktop application entry..."
@@ -418,9 +437,11 @@ Categories=Development;Utility;
 StartupNotify=true
 DESKTOP_EOF
 
-    # Try to use omarchy-launch-webapp if available (Omarchy-specific)
-    if command -v omarchy-launch-webapp &> /dev/null; then
-        info "Detected Omarchy - using omarchy-launch-webapp"
+    # Use omarchy-launch-webapp if Omarchy 3.x+ is detected
+    if check_omarchy; then
+        local omarchy_version
+        omarchy_version=$(omarchy-version 2>/dev/null | grep -oP '^\d+\.\d+\.\d+' || echo "unknown")
+        info "Detected Omarchy ${omarchy_version} - using omarchy-launch-webapp"
         sed -i "s|^Exec=.*|Exec=omarchy-launch-webapp http://${REWINDEX_HOST}:${REWINDEX_PORT}/ui|" "$desktop_file"
     fi
 

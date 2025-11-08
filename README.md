@@ -1,140 +1,156 @@
-Rewindex – Local Code Search (Elasticsearch) WIP
+# Rewindex
 
-Quick start if in Omarchy Linux:
+Fast, local code search powered by Elasticsearch. Index your entire home directory and search from anywhere.
 
-`curl -fsSL https://raw.githubusercontent.com/ryrobes/rewindex/refs/heads/master/install.sh | bash`
+## Quick Install
 
-- Index files into Elasticsearch with per-file current doc + version history
-- Extract simple metadata (imports, functions, classes, TODOs)
-- CLI for indexing and search (speaks to ES)
-- Minimal HTTP server exposing simple search and index status
+```bash
+curl -fsSL https://raw.githubusercontent.com/ryrobes/rewindex/main/install.sh | bash
+```
 
-Notes
+This will:
+- Install Elasticsearch via Docker
+- Download and install the `rewindex` binary
+- Set up a systemd service for auto-indexing
+- Index your home directory
 
-- Requires a running Elasticsearch on `localhost:9200` (see Quickstart below). No Python client dependency is required; we use HTTP directly.
-- Configuration reads defaults. If `.rewindex.json` exists, it will be loaded. `.rewindex.yml` is supported only if PyYAML is available; otherwise it’s ignored.
+## Usage
 
-Quickstart
+### Web UI
 
-Install (developer mode):
+Open in your browser:
+```
+http://localhost:8899/ui
+```
 
-- pip install -e .
+Features:
+- Visual canvas of search results
+- Real-time search with filters
+- Timeline view for file history
+- Monaco editor for viewing/editing files
+- Treemap visualization
 
-Install globally with pipx (recommended):
+### CLI Search
 
-- pipx install .
+Search from anywhere in your home directory:
 
-Build wheel/sdist and install via pipx from dist/:
+```bash
+# Simple search (auto-scoped to current directory)
+rewindex "authentication"
 
-- python -m build
-- pipx install dist/rewindex-0.1.0-py3-none-any.whl
+# Search entire home directory
+rewindex "authentication" --all
 
-Or build and install from sdist/wheel via `pyproject.toml`.
+# With filters
+rewindex "useEffect" --lang javascript --limit 20
 
-1) Start Elasticsearch (Docker):
+# Fuzzy search (typo-tolerant)
+rewindex "athentication" --fuzzy
 
-   `docker compose up -d`
+# Partial/prefix matching
+rewindex "auth" --partial
+```
 
-2) Initialize indices (from project root):
+**Smart path scoping**: When you search from a subdirectory, results are automatically filtered to that location:
 
-   `python3 -m rewindex.cli index init`
+```bash
+~/repos/myproject$ rewindex "config"
+# Auto-scoped to: repos/myproject/
+# Only shows results under current directory
 
-   This auto-generates a unique project id (if missing), creates indices if needed, and performs an initial full index.
+~/repos/myproject$ rewindex "config" --all
+# Searches entire home directory
+```
 
-3) Index the project (one-shot):
+### Common Commands
 
-   `python3 -m rewindex.cli index start`
+```bash
+# Search with options
+rewindex "query" --limit 20            # Limit results
+rewindex "query" --lang python         # Filter by language
+rewindex "query" --path "repos/**"     # Filter by path pattern
+rewindex "query" --highlight           # Enable highlighting
 
-   To keep indexing with a simple polling watcher:
+# Find symbols
+rewindex find-function authenticate
+rewindex find-class UserService
+rewindex find-todos
 
-   `python3 -m rewindex.cli index start --watch`
+# View file history
+rewindex history path/to/file.py
+rewindex view path/to/file.py --as-of "2 hours"
 
-4) Search:
+# Service management
+systemctl --user status rewindex       # Check status
+systemctl --user restart rewindex      # Restart
+journalctl --user -u rewindex -f       # View logs
+```
 
-   `python3 -m rewindex.cli search "authentication" --lang python --limit 5`
+## Configuration
 
-   Highlighting is off by default for LLM-friendly output. Enable with `--highlight`:
+The service indexes your home directory by default. Configuration lives in `~/.rewindex.json`.
 
-   `python3 -m rewindex.cli search "authentication" --highlight`
+### Exclude Patterns
 
-5) Start HTTP server + Web UI (from the project or any subfolder):
+Add patterns to `~/.rewindexignore` (gitignore syntax):
 
-   `python3 -m rewindex.cli serve --host 127.0.0.1 --port 8899`
+```
+# Ignore large directories
+node_modules/
+.venv/
+build/
 
-   (Alternatively: `python3 -m rewindex.api_server`)
+# Ignore file types
+*.log
+*.tmp
+```
 
-   - POST /search/simple  (JSON body: {"query": "...", "filters": {...}, "options": {...}})
-   - GET  /index/status
+### Elasticsearch
 
-6) Open the Web UI: `http://localhost:8899/ui`
-   - Status shows `project_root` and `project_id` that the server is grounded to
-   - Use "Start Watcher" to begin live indexing; toggle "Follow CLI" to visualize CLI searches
+Default: `http://localhost:9200`
 
-   - Pan/zoom canvas with documents as tiles (Monaco-based viewer if online; falls back to plain <pre> otherwise)
-   - Sidebar shows search, results and index status
+To use a remote Elasticsearch server:
+```bash
+export REWINDEX_ES_HOST="remote-server:9200"
+```
 
-Rebuild indices after analyzer updates
+## Features
 
-If you update analyzers/mappings (e.g., to improve underscore handling), rebuild:
+- **Fast Search**: Elasticsearch-powered full-text search
+- **Auto-Indexing**: Background watcher keeps index up-to-date
+- **Version History**: Travel back in time to see old versions
+- **Smart Scoping**: Auto-filters to current directory
+- **Web + CLI**: Use whichever interface you prefer
+- **Metadata Extraction**: Finds functions, classes, imports, TODOs
+- **Multi-Language**: Supports 80+ programming languages
 
-- Clean rebuild (drops and recreates indices):
+## Uninstall
 
-  `python3 -m rewindex.cli index rebuild --clean`
+```bash
+systemctl --user stop rewindex
+systemctl --user disable rewindex
+rm -f ~/.local/bin/rewindex
+rm -f ~/.local/bin/rewindex-service
+rm -f ~/.config/systemd/user/rewindex.service
+systemctl --user daemon-reload
+docker stop rewindex-elasticsearch
+docker rm rewindex-elasticsearch
+```
 
-- Reindex without dropping (keeps indices):
+## Help
 
-  `python3 -m rewindex.cli index rebuild`
+```bash
+rewindex --help              # General help
+rewindex search --help       # Search options
+rewindex index --help        # Indexing commands
+```
 
-Temporal and History (CLI)
+## Documentation
 
-- Search across all versions:
+For development documentation, architecture details, and advanced configuration, see:
+- [CLAUDE.md](CLAUDE.md) - Developer guide
+- [SMART_PATH_UX.md](SMART_PATH_UX.md) - Smart path feature details
 
-  `python3 -m rewindex.cli search "token" --all-versions`
+## License
 
-- Search as-of a timestamp (ISO 8601):
-
-  `python3 -m rewindex.cli search "token" --as-of 2025-01-31T12:00:00`
-
-- Include deleted (non-current) files in results (files index):
-
-  `python3 -m rewindex.cli search "token" --include-deleted`
-
-- Show history for a file:
-
-  `python3 -m rewindex.cli history path/to/file.py`
-
-- Show a specific version by hash:
-
-  `python3 -m rewindex.cli show path/to/file.py --version <content_hash>`
-
-- Diff two versions by hash:
-
-  `python3 -m rewindex.cli diff path/to/file.py <hash1> <hash2>`
-
-Elasticsearch Quickstart (Docker)
-
-Rewindex requires a running Elasticsearch on `localhost:9200`. Use the following to spin up a local single-node instance for development.
-
-Option A — docker run
-
-- Pull and run (8.x):
-
-  `docker run --name rewindex-es -p 9200:9200 -p 9300:9300 -e discovery.type=single-node -e xpack.security.enabled=false -e ES_JAVA_OPTS="-Xms512m -Xmx512m" docker.elastic.co/elasticsearch/elasticsearch:8.12.2`
-
-- Verify:
-
-  `curl http://localhost:9200`
-
-  Should return cluster info JSON with `tagline: "You Know, for Search"`.
-
-Ports and config expectations
-
-- Elasticsearch HTTP: `localhost:9200` (default from FRD and used by `.rewindex.json` below)
-- Elasticsearch transport: `localhost:9300` (cluster-internal; exposed for completeness)
-- Rewindex HTTP (this repo’s minimal API server): `localhost:8899`
-
-Notes
-
-- Security is disabled for local dev via `xpack.security.enabled=false`. For a secured setup, omit that flag and use the auto-generated credentials shown in container logs.
-- If you need to adjust memory, change `ES_JAVA_OPTS` (e.g., `-Xms1g -Xmx1g`).
-- This project now indexes to and searches from Elasticsearch directly.
+MIT
