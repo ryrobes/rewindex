@@ -1,7 +1,7 @@
 # .rewindexignore - Patterns to exclude from rewindex watching/indexing
 # Uses .gitignore syntax (glob patterns, comments with #)
 
-/.local/nvim/lazy/**
+.local/nvim/lazy/**
 .config/zed/**
 .config/fcitx5/**
 **/fcitx*/**
